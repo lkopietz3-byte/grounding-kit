@@ -1,0 +1,44 @@
+{
+  "name": "grounding-kit",
+  "version": "0.1.0",
+  "description": "Deterministic, zero-dependency sentence-level citation-grounding checker for AI-generated text. Splits text into sentences and classifies each as grounded, placeholder, ungrounded, or invalid (forged citation) — no LLM judge required.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "citation",
+    "grounding",
+    "hallucination",
+    "rag",
+    "llm",
+    "fact-checking",
+    "ai-safety",
+    "sentence-splitter"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}
