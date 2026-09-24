@@ -104,7 +104,7 @@ function normalizeMarkerAdjacency(text: string, markerPattern: RegExp): string {
     const start = m.index ?? 0;
     const end = start + m[0].length;
     result += text.slice(last, start);
-    if (result.length > 0 && TERMINATOR_CLASS.test(result[result.length - 1]!)) {
+    if (result.length > 0 && TERMINATOR_CLASS.test(result[result.length - 1])) {
       result += " ";
     }
     result += m[0];
@@ -141,7 +141,7 @@ function endsOnFalseBoundary(
   if (/(?:^|\s)[A-Za-z]\.$/.test(trimmed)) return true;
   const m = /([A-Za-z][A-Za-z.]*)\.$/.exec(trimmed);
   if (!m) return false;
-  const word = m[1]!.replace(/\./g, "").toLowerCase();
+  const word = m[1].replace(/\./g, "").toLowerCase();
   if (alwaysFuse.has(word)) return true;
   if (contextFuse.has(word)) {
     // No following fragment -> a real sentence end. A capitalized next
@@ -276,7 +276,7 @@ export function splitSentences(text: string, config: SplitterConfig = {}): strin
     const parts = line.split(/(?<=[.!?。．！？])\s+|(?<=[。．！？])(?=\S)/);
     let buffer = "";
     for (let i = 0; i < parts.length; i++) {
-      buffer = buffer ? `${buffer} ${parts[i]}` : parts[i]!;
+      buffer = buffer ? `${buffer} ${parts[i]}` : parts[i];
       if (!endsOnFalseBoundary(buffer, parts[i + 1], alwaysFuse, contextFuse)) {
         const trimmed = buffer.trim();
         if (trimmed) sentences.push(trimmed);
