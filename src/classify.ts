@@ -48,6 +48,14 @@ function normalizeForOverlap(s: string): string {
  * in the evidence text. This catches paraphrase-free grounding and obvious
  * mismatches; it will both miss real paraphrases and pass some coincidental
  * word overlap. Replace it for anything that needs real semantic judgment.
+ *
+ * Normalization (both sides, before comparing): Unicode NFC, lowercased,
+ * punctuation collapsed to spaces (any script's letters/digits are kept via
+ * `\p{L}`/`\p{N}`), whitespace collapsed. The NFC step means a claim and its
+ * evidence written with the same accented text in different (both valid)
+ * Unicode forms — e.g. composed "café" vs. decomposed "e" + combining accent
+ * — still match; without it, a combining mark isn't `\p{L}`/`\p{N}` and gets
+ * stripped, silently changing the word.
  */
 export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
   const claim = normalizeForOverlap(sentenceText);

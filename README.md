@@ -45,13 +45,36 @@ marker sitting on the wrong sentence, or pointing at nothing.
 
 Run it before an LLM judge, not instead of one, if your stakes justify both.
 
+**Relationship to corroboration-kit:** a sibling, similarly-shaped library
+that answers a different question. grounding-kit checks that a citation
+*marker* in generated text actually points at the evidence span it's
+supposed to (mechanical, sentence-level, no judgment about the evidence
+itself). corroboration-kit takes evidence *signals you've already collected*
+about a claim and grades how independently corroborated that claim is (2+
+independent sources vs. a single source vs. none). Use grounding-kit to catch
+a forged or misattributed citation marker; use corroboration-kit once you
+have real evidence in hand and need to grade how much it's worth.
+
 ## Install
 
+Not yet published to npm. Until it is, install from the git repository
+(the exact command depends on where you host it — GitHub, a private
+remote, or a local path):
+
 ```bash
-npm install grounding-kit
+npm install git+https://github.com/lkopietz3-byte/grounding-kit.git
 ```
 
-(Zero runtime dependencies — this just copies the package itself.)
+or clone it and build locally:
+
+```bash
+git clone https://github.com/lkopietz3-byte/grounding-kit.git
+cd grounding-kit
+npm install
+npm run build
+```
+
+Zero runtime dependencies either way — nothing else gets pulled in.
 
 ## Quick start
 
