@@ -35,13 +35,15 @@ export interface AbbreviationConfig {
  * abbreviation conventions, or to add domain-specific ones (they replace,
  * not merge, so you always know exactly what's active).
  */
-export const DEFAULT_ABBREVIATIONS: AbbreviationConfig = {
-  alwaysFuse: ["mr", "mrs", "ms", "dr", "prof", "hon", "st", "v", "vs"],
-  contextFuse: [
+export const DEFAULT_ABBREVIATIONS: AbbreviationConfig = Object.freeze({
+  alwaysFuse: Object.freeze([
+    "mr", "mrs", "ms", "dr", "prof", "hon", "st", "v", "vs",
+  ]),
+  contextFuse: Object.freeze([
     "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
     "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
-  ],
-};
+  ]),
+});
 
 /**
  * Regex matching one citation marker. Must contain exactly one capture group
@@ -84,11 +86,6 @@ function freshGlobal(re: RegExp): RegExp {
   return new RegExp(re.source, flags);
 }
 
-function freshTest(re: RegExp, str: string): boolean {
-  const flags = re.flags.replace(/[gy]/g, "");
-  return new RegExp(re.source, flags).test(str);
-}
-
 // Insert a space wherever a citation marker is glued directly to adjacent
 // prose with no whitespace — glued to a following word ("]]The"), glued to a
 // following word via a terminator ("]].The"), or glued to a PRECEDING
@@ -116,7 +113,10 @@ function normalizeMarkerAdjacency(text: string, markerPattern: RegExp): string {
       result += afterMarker;
       cursor += 1;
     }
-    if (/[A-Za-z0-9]/.test(text[cursor] ?? "")) {
+    // \p{L}\p{N} (any script's letters/digits), not the ASCII-only
+    // [A-Za-z0-9]: a marker glued directly to non-Latin prose ("[[cite:e1]]
+    // こんにちは") needs the same normalizing space as one glued to English.
+    if (/[\p{L}\p{N}]/u.test(text[cursor] ?? "")) {
       result += " ";
     }
     last = cursor;
@@ -158,7 +158,11 @@ function endsOnFalseBoundary(
 function isCitationOnly(fragment: string, markerPattern: RegExp): boolean {
   const re = freshGlobal(markerPattern);
   const withoutMarkers = fragment.replace(re, "");
-  return withoutMarkers !== fragment && !/[A-Za-z0-9]/.test(withoutMarkers);
+  // \p{L}\p{N} (any script), not [A-Za-z0-9]: prose in Japanese, Arabic,
+  // Cyrillic, etc. must count as "real content" here too, or a non-Latin
+  // sentence sitting next to a citation marker gets misread as pure
+  // leftover punctuation and silently absorbed into the previous sentence.
+  return withoutMarkers !== fragment && !/[\p{L}\p{N}]/u.test(withoutMarkers);
 }
 
 // A fragment can BEGIN with citation markers that actually terminate the
@@ -210,14 +214,26 @@ function splitGroundingUnits(
   }
   // Belt-and-suspenders: also shield whatever the marker/placeholder regexes
   // match directly, in case a caller's marker syntax doesn't use brackets at
-  // all (e.g. "{{ref:id}}").
-  for (const pattern of [markerPattern, placeholderPattern]) {
-    for (const m of sentence.matchAll(freshGlobal(pattern))) {
-      const start = m.index ?? 0;
-      const end = start + m[0].length;
-      for (let j = start; j < end; j++) inside[j] = true;
-    }
+  // all (e.g. "{{ref:id}}"). While scanning marker matches, also record each
+  // match's END offset into a prefix-count array: the colon-boundary check
+  // below needs to know "does the pending clause contain a marker?" at every
+  // ':', and re-slicing + re-testing the (growing) pending clause from
+  // scratch each time is O(n) per query — O(n^2) overall on a long,
+  // marker-free, colon-heavy input. A prefix count answers the same question
+  // in O(1) per query.
+  const markerEndCounts = new Uint32Array(sentence.length + 1);
+  for (const m of sentence.matchAll(freshGlobal(markerPattern))) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    for (let j = start; j < end; j++) inside[j] = true;
+    if (end <= sentence.length) markerEndCounts[end] += 1;
   }
+  for (const m of sentence.matchAll(freshGlobal(placeholderPattern))) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    for (let j = start; j < end; j++) inside[j] = true;
+  }
+  for (let i = 1; i <= sentence.length; i++) markerEndCounts[i] += markerEndCounts[i - 1];
 
   const isDigit = (c: string | undefined) => c != null && c >= "0" && c <= "9";
   const units: string[] = [];
@@ -231,10 +247,15 @@ function splitGroundingUnits(
     // clause catches exactly that. A leading uncited label ("Results: ...
     // [[cite:e1]]") is left intact, behaving like an accepted comma-join.
     // Numeric colons (time "9:30", ratio "3:1") are never boundaries.
+    // markerEndCounts[i] - markerEndCounts[start] is the number of marker
+    // matches whose end offset falls in (start, i] — i.e. a marker fully
+    // inside the pending clause. Markers can't straddle an accepted split
+    // point (a split point is never `inside` a marker match), so this is
+    // exactly equivalent to "the pending clause contains a marker."
     const isColonBoundary =
       ch === ":" &&
       !(isDigit(sentence[i - 1]) && isDigit(sentence[i + 1])) &&
-      freshTest(markerPattern, sentence.slice(start, i));
+      markerEndCounts[i] - markerEndCounts[start] > 0;
     if (ch === ";" || ch === "—" || isColonBoundary) {
       const unit = sentence.slice(start, i).trim();
       if (unit) units.push(unit);
@@ -277,7 +298,16 @@ export function splitSentences(text: string, config: SplitterConfig = {}): strin
     let buffer = "";
     for (let i = 0; i < parts.length; i++) {
       buffer = buffer ? `${buffer} ${parts[i]}` : parts[i];
-      if (!endsOnFalseBoundary(buffer, parts[i + 1], alwaysFuse, contextFuse)) {
+      // endsOnFalseBoundary only inspects the trailing word of its `fragment`
+      // argument ($-anchored regexes), which is fully contained in `parts[i]`
+      // itself regardless of how much has already accumulated in `buffer`.
+      // Passing the whole (potentially long-growing) `buffer` here instead of
+      // just the newly-appended part is O(current buffer length) per
+      // iteration purely from re-flattening and re-scanning it — O(n^2) over
+      // a long run of fused fragments (e.g. many single-letter initials in a
+      // row, which never hit a real sentence boundary). Passing `parts[i]`
+      // keeps each check O(that part's length) and the whole loop O(n).
+      if (!endsOnFalseBoundary(parts[i], parts[i + 1], alwaysFuse, contextFuse)) {
         const trimmed = buffer.trim();
         if (trimmed) sentences.push(trimmed);
         buffer = "";
@@ -306,7 +336,15 @@ export function splitSentences(text: string, config: SplitterConfig = {}): strin
       if (merged.length > 0) {
         merged[merged.length - 1] = `${merged[merged.length - 1]} ${markers}`;
       }
-      if (rest && /[A-Za-z0-9]/.test(rest)) merged.push(rest);
+      // `rest` already went through peelLeadingMarkers' trimStart(), so if
+      // it's non-empty it necessarily starts with (and therefore contains) a
+      // non-whitespace character — no need to additionally require that
+      // character be ASCII alnum. The old `[A-Za-z0-9]` guard here silently
+      // discarded any surviving remainder written in a non-Latin script
+      // (e.g. a whole CJK sentence right after a peeled marker) or made of
+      // bare punctuation (e.g. a lone "!"), deleting real content from the
+      // output instead of just an empty string.
+      if (rest) merged.push(rest);
       continue;
     }
     // Trailing citation-only fragment (marker after the period, on its own).
