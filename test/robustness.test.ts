@@ -72,6 +72,22 @@ describe("bug: quadratic-time (algorithmic-complexity DoS) inputs", () => {
     expect(sentences.length).toBeGreaterThan(0);
     expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
   });
+
+  it("handles one long unbroken run of letters with no period in linear-ish time", () => {
+    // A long token/hash/base64 blob with no periods at all, pasted into a
+    // document, is realistic input a grounding checker has to survive. The
+    // old endsOnFalseBoundary() ran an unanchored `[A-Za-z][A-Za-z.]*\.$`
+    // regex with no trailing "." anywhere to find, forcing the engine to
+    // retry the greedy `*` from every start position before giving up:
+    // O(n^2). 40,000 letters alone measured 827ms on the old code; this is
+    // 100,000.
+    const input = "a".repeat(100_000);
+    const start = Date.now();
+    const sentences = splitSentences(input);
+    const elapsed = Date.now() - start;
+    expect(sentences).toEqual([input]);
+    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+  });
 });
 
 // Deterministic seeded PRNG (mulberry32) so these property tests are

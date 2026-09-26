@@ -135,6 +135,16 @@ function endsOnFalseBoundary(
   contextFuse: Set<string>,
 ): boolean {
   const trimmed = fragment.trimEnd();
+  // Both checks below require a trailing literal ".": abbreviation fusion is
+  // a period-only concept (see AbbreviationConfig's doc comment) and never
+  // applies to "!", "?", or a non-ASCII terminator. Bailing out here when
+  // there isn't one is also a required *performance* guard, not just a
+  // shortcut: without it, an unanchored regex ending in a literal that isn't
+  // actually present forces the engine to retry its unbounded `*` from every
+  // start position in `trimmed` before giving up — O(n^2) on a long run of
+  // plain letters with no period at all (e.g. a long token or hash pasted
+  // into a document with no trailing punctuation).
+  if (!trimmed.endsWith(".")) return false;
   // A single letter is a name initial ("Dana M. Whitfield") only when it
   // stands alone. A letter glued to a number/currency ("$9M.") is a unit that
   // really ends the sentence.
