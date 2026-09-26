@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyDocument,
   classifySentence,
+  splitSentences,
   type EvidenceMap,
 } from "../src/index.js";
 
@@ -72,5 +73,87 @@ describe("bug: Unicode normalization mismatch (NFC vs NFD) in defaultSupports", 
     expect(marked.validIds).toEqual(["e1"]);
     // sanity: the unmarked claim is ungrounded (no citation), not asserting on `result` beyond that it didn't throw
     expect(result.status).toBe("ungrounded");
+  });
+});
+
+describe("fuzz categories: abbreviations, decimals, URLs, initials, unicode scripts", () => {
+  // These lock in and document CURRENT behavior for input shapes the kit's
+  // own comments call out as fault lines. Several are honest, disclosed
+  // limits of the deliberately small default abbreviation list (see
+  // DEFAULT_ABBREVIATIONS's doc comment and the README's "Limits" section),
+  // not bugs — the point of testing them is to catch a silent regression,
+  // not to claim more coverage than the defaults promise.
+
+  it("does not fuse ordinal list markers ('1.', '2.') — not in the default list", () => {
+    expect(splitSentences("1. Item one. 2. Item two.")).toEqual([
+      "1.", "Item one.", "2.", "Item two.",
+    ]);
+  });
+
+  it("does not fuse 'a.m.'/'p.m.' — not in the default list", () => {
+    expect(splitSentences("The meeting is at 9 a.m. sharp.")).toEqual([
+      "The meeting is at 9 a.m.", "sharp.",
+    ]);
+  });
+
+  it("does not fuse 'U.S.' — not in the default list ('us' is absent from both fuse lists)", () => {
+    expect(splitSentences("The U.S. economy grew.")).toEqual([
+      "The U.S.", "economy grew.",
+    ]);
+  });
+
+  it("fuses 'e.g.' via the contextFuse list (lower-case continuation)", () => {
+    expect(splitSentences("Please see e.g. the appendix.")).toEqual([
+      "Please see e.g. the appendix.",
+    ]);
+  });
+
+  it("never splits mid-decimal (no whitespace after the decimal point)", () => {
+    expect(splitSentences("The price is 3.5 percent higher. Not bad.")).toEqual([
+      "The price is 3.5 percent higher.",
+      "Not bad.",
+    ]);
+  });
+
+  it("does not falsely split a multi-dot filename/URL that ends the sentence", () => {
+    expect(splitSentences("Download the file at file.tar.gz. It is large.")).toEqual([
+      "Download the file at file.tar.gz.",
+      "It is large.",
+    ]);
+  });
+
+  it("keeps chained single-letter initials together (J. R. R. Tolkien)", () => {
+    expect(splitSentences("J. R. R. Tolkien wrote it. It sold well.")).toEqual([
+      "J. R. R. Tolkien wrote it.",
+      "It sold well.",
+    ]);
+  });
+
+  it("fuses a corporate suffix inside parentheses via alwaysFuse-adjacent contextFuse handling", () => {
+    expect(splitSentences("The company (Acme Corp.) filed suit. It lost.")).toEqual([
+      "The company (Acme Corp.) filed suit.",
+      "It lost.",
+    ]);
+  });
+
+  it("does not crash on RTL script text mixed with a citation marker", () => {
+    const text = "مرحبا [[cite:e1]] شكرا.";
+    expect(() => splitSentences(text)).not.toThrow();
+    const doc = classifyDocument(text, { e1: "evidence" });
+    expect(doc.sentences.length).toBeGreaterThan(0);
+  });
+
+  it("does not crash on emoji and combining marks adjacent to a terminator", () => {
+    const text = "Launch day \u{1F680}\u{1F389}! é́́ done.";
+    expect(() => splitSentences(text)).not.toThrow();
+  });
+
+  it("does not crash on a non-breaking space between an abbreviation and its name", () => {
+    // The NBSP is whitespace (JS \s matches it), so it's treated like any
+    // other separator: consumed by the split, then re-inserted as an
+    // ordinary space when the abbreviation fragment is rejoined. The name
+    // itself is never lost or mis-split.
+    const text = "Mr. Smith arrived. Then he left.";
+    expect(splitSentences(text)).toEqual(["Mr. Smith arrived.", "Then he left."]);
   });
 });
