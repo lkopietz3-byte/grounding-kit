@@ -14,6 +14,12 @@ export type SentenceStatus = "grounded" | "placeholder" | "ungrounded" | "invali
  * This is the closed world: a marker whose id isn't a key here (or whose
  * evidence doesn't plausibly support the sentence) is a forged citation, not
  * an honest gap.
+ *
+ * Lookups are by *own* property only: a marker id that happens to name an
+ * inherited `Object.prototype` member (`"__proto__"`, `"constructor"`,
+ * `"toString"`, `"hasOwnProperty"`, ...) is treated the same as a genuinely
+ * missing id — reported as `invalid` — never resolved through the prototype
+ * chain.
  */
 export type EvidenceMap = Readonly<Record<string, string>>;
 
@@ -28,6 +34,7 @@ export type SupportsFn = (sentenceText: string, evidenceText: string) => boolean
 
 function normalizeForOverlap(s: string): string {
   return s
+    .normalize("NFC")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
@@ -94,9 +101,16 @@ export function classifySentence(
   const validIds: string[] = [];
   let hasInvalid = false;
   for (const id of citedIds) {
-    const evidence = evidenceMap[id];
-    if (evidence === undefined) {
-      hasInvalid = true; // marker id doesn't exist in the evidence map
+    // Own-property lookup only. `evidenceMap` is a plain object, so a
+    // *prototype-chain* hit (marker id "__proto__", "constructor",
+    // "toString", ...) would otherwise resolve to Object.prototype's value
+    // for that name instead of `undefined` — handing `supports()` an object
+    // or function instead of a string and crashing it. `Object.hasOwn` plus
+    // a `typeof` guard treats any such id exactly like a genuinely-missing
+    // one: an invalid (forged/unknown) citation, never a thrown exception.
+    const evidence = Object.hasOwn(evidenceMap, id) ? evidenceMap[id] : undefined;
+    if (typeof evidence !== "string") {
+      hasInvalid = true; // marker id doesn't exist in the evidence map (or maps to a non-string)
       continue;
     }
     if (!supports(claimText, evidence)) {
