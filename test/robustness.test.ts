@@ -39,6 +39,21 @@ describe("bug: non-ASCII / punctuation-only content dropped after a peeled marke
     const sentences = splitSentences("Real claim. [[cite:e1]]こんにちは");
     expect(sentences).toEqual(["Real claim. [[cite:e1]]", "こんにちは"]);
   });
+
+  it("does not merge a cited CJK clause into an unrelated preceding sentence (isCitationOnly path)", () => {
+    // Distinct from the peelLeadingMarkers cases above: here the CJK text
+    // comes BEFORE its marker within its own clause ("こんにちは[[cite:e2]]"),
+    // so isCitationOnly() (not peelLeadingMarkers) decides whether it's real
+    // content. The old ASCII-only check saw no [A-Za-z0-9] left after
+    // stripping the marker and wrongly treated the whole clause as "just a
+    // stray citation," merging it into the previous, unrelated sentence
+    // instead of keeping it as its own grounding unit.
+    const text = "First claim [[cite:e1]]; こんにちは[[cite:e2]].";
+    expect(splitSentences(text)).toEqual([
+      "First claim [[cite:e1]]",
+      "こんにちは[[cite:e2]].",
+    ]);
+  });
 });
 
 describe("bug: quadratic-time (algorithmic-complexity DoS) inputs", () => {
