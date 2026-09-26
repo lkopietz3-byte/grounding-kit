@@ -7,6 +7,18 @@ import {
   type SplitterConfig,
 } from "./sentenceSplitter.js";
 
+/**
+ * A sentence's grounding outcome, in precedence order (checked in this
+ * order by `classifySentence`; the first match wins):
+ * - `"invalid"` — cites a marker id that's missing from the evidence map, or
+ *   whose evidence doesn't pass `supports()`. A forged/unattributable
+ *   citation, outranking everything else.
+ * - `"placeholder"` — no invalid citation, and the sentence matches the
+ *   placeholder pattern (an honest "no source for this" gap).
+ * - `"grounded"` — no invalid citation, no placeholder, and at least one
+ *   citation, all valid.
+ * - `"ungrounded"` — a bare, uncited claim: none of the above.
+ */
 export type SentenceStatus = "grounded" | "placeholder" | "ungrounded" | "invalid";
 
 /**
@@ -72,12 +84,17 @@ export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
   return overlap / claimWords.size >= 0.6;
 };
 
+/** Options for `classifySentence`/`classifyDocument`: splitting config plus the evidence-match function. */
 export interface ClassifyConfig extends SplitterConfig {
+  /** Replaces `defaultSupports`. */
   supports?: SupportsFn;
 }
 
+/** Per-sentence result of `classifySentence`/`classifyDocument`. */
 export interface SentenceClassification {
+  /** The sentence (grounding unit) text, exactly as produced by `splitSentences`. */
   sentence: string;
+  /** This sentence's grounding outcome; see `SentenceStatus` for the precedence rule. */
   status: SentenceStatus;
   /** Every marker id cited by this sentence, including invalid/forged ones. */
   citedIds: string[];
@@ -140,8 +157,11 @@ export function classifySentence(
   return { sentence, status: "ungrounded", citedIds, validIds };
 }
 
+/** Whole-document result of `classifyDocument`. */
 export interface DocumentClassification {
+  /** Every sentence's classification, in document order. */
   sentences: SentenceClassification[];
+  /** How many sentences landed in each status. */
   counts: Record<SentenceStatus, number>;
   /** Distinct evidence ids that were genuinely (validly) cited anywhere in the document. */
   citedEvidenceIds: string[];

@@ -65,9 +65,17 @@ export const DEFAULT_MARKER_PATTERN = /\[\[cite:\s*([a-zA-Z0-9_-]+)\s*\]\]/g;
 export const DEFAULT_PLACEHOLDER_PATTERN =
   /\[(?:citation needed|more research needed|TK)[^\]]*\]/i;
 
+/**
+ * Options for `splitSentences` (and, via `ClassifyConfig`, for
+ * `classifySentence`/`classifyDocument`). Every field is optional; an
+ * omitted field falls back to its `DEFAULT_*` export.
+ */
 export interface SplitterConfig {
+  /** Replaces `DEFAULT_ABBREVIATIONS` entirely (does not merge with it). */
   abbreviations?: AbbreviationConfig;
+  /** Replaces `DEFAULT_MARKER_PATTERN`. Must have exactly one capture group. */
   markerPattern?: RegExp;
+  /** Replaces `DEFAULT_PLACEHOLDER_PATTERN`. */
   placeholderPattern?: RegExp;
 }
 
