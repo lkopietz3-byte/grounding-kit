@@ -70,7 +70,9 @@ npm install
 npm run build
 ```
 
-Zero runtime dependencies either way — nothing else gets pulled in.
+Zero runtime dependencies either way — nothing else gets pulled in. ESM
+package, Node >= 20; CommonJS `require("grounding-kit")` also works on Node
+versions that support `require(esm)` (>=20.19.0, >=22.12.0).
 
 ## Quick start
 
@@ -302,6 +304,18 @@ convention doesn't use brackets at all, the second mechanism still covers it.
   document or a single sentence-length span; the tighter the span, the more
   meaningful both the default overlap check and any injected `supports()`
   function will be.
+
+## Relationship to sibling kits
+
+[`provenance-kit`](https://github.com/lkopietz3-byte/provenance-kit) tracks
+where a piece of content or data came from; `grounding-kit` checks whether
+individual sentences in AI-generated text are backed by a citation into an
+`evidenceMap` you already built. The two don't share code — a provenance
+record is one reasonable source for the `evidenceMap` you pass in here.
+[`corroboration-kit`](https://github.com/lkopietz3-byte/corroboration-kit)
+grades whether independent evidence backs a claim once you have it; use
+`grounding-kit` first to find which sentences claim support, then
+`corroboration-kit` to grade the quality of that support.
 
 ## Development
 
