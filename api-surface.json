@@ -1,0 +1,14 @@
+{
+  "grounding-kit": [
+    "DEFAULT_ABBREVIATIONS",
+    "DEFAULT_MARKER_PATTERN",
+    "DEFAULT_PLACEHOLDER_PATTERN",
+    "classifyDocument",
+    "classifySentence",
+    "defaultSupports",
+    "extractAllCitedIds",
+    "extractCitedIds",
+    "splitSentences",
+    "stripCitationMarkers"
+  ]
+}

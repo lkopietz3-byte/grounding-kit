@@ -84,10 +84,10 @@ describe("splitSentences: leading-marker peeling", () => {
     expect(doc.counts.invalid).toBe(0);
 
     const [first, second] = doc.sentences;
-    expect(first!.status).toBe("grounded");
-    expect(first!.citedIds).toEqual(["e1"]);
-    expect(second!.status).toBe("ungrounded");
-    expect(second!.citedIds).toEqual([]);
+    expect(first.status).toBe("grounded");
+    expect(first.citedIds).toEqual(["e1"]);
+    expect(second.status).toBe("ungrounded");
+    expect(second.citedIds).toEqual([]);
   });
 });
 

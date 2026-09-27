@@ -7,6 +7,18 @@ import {
   type SplitterConfig,
 } from "./sentenceSplitter.js";
 
+/**
+ * A sentence's grounding outcome, in precedence order (checked in this
+ * order by `classifySentence`; the first match wins):
+ * - `"invalid"` — cites a marker id that's missing from the evidence map, or
+ *   whose evidence doesn't pass `supports()`. A forged/unattributable
+ *   citation, outranking everything else.
+ * - `"placeholder"` — no invalid citation, and the sentence matches the
+ *   placeholder pattern (an honest "no source for this" gap).
+ * - `"grounded"` — no invalid citation, no placeholder, and at least one
+ *   citation, all valid.
+ * - `"ungrounded"` — a bare, uncited claim: none of the above.
+ */
 export type SentenceStatus = "grounded" | "placeholder" | "ungrounded" | "invalid";
 
 /**
@@ -14,6 +26,12 @@ export type SentenceStatus = "grounded" | "placeholder" | "ungrounded" | "invali
  * This is the closed world: a marker whose id isn't a key here (or whose
  * evidence doesn't plausibly support the sentence) is a forged citation, not
  * an honest gap.
+ *
+ * Lookups are by *own* property only: a marker id that happens to name an
+ * inherited `Object.prototype` member (`"__proto__"`, `"constructor"`,
+ * `"toString"`, `"hasOwnProperty"`, ...) is treated the same as a genuinely
+ * missing id — reported as `invalid` — never resolved through the prototype
+ * chain.
  */
 export type EvidenceMap = Readonly<Record<string, string>>;
 
@@ -28,6 +46,7 @@ export type SupportsFn = (sentenceText: string, evidenceText: string) => boolean
 
 function normalizeForOverlap(s: string): string {
   return s
+    .normalize("NFC")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
@@ -41,6 +60,14 @@ function normalizeForOverlap(s: string): string {
  * in the evidence text. This catches paraphrase-free grounding and obvious
  * mismatches; it will both miss real paraphrases and pass some coincidental
  * word overlap. Replace it for anything that needs real semantic judgment.
+ *
+ * Normalization (both sides, before comparing): Unicode NFC, lowercased,
+ * punctuation collapsed to spaces (any script's letters/digits are kept via
+ * `\p{L}`/`\p{N}`), whitespace collapsed. The NFC step means a claim and its
+ * evidence written with the same accented text in different (both valid)
+ * Unicode forms — e.g. composed "café" vs. decomposed "e" + combining accent
+ * — still match; without it, a combining mark isn't `\p{L}`/`\p{N}` and gets
+ * stripped, silently changing the word.
  */
 export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
   const claim = normalizeForOverlap(sentenceText);
@@ -57,12 +84,17 @@ export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
   return overlap / claimWords.size >= 0.6;
 };
 
+/** Options for `classifySentence`/`classifyDocument`: splitting config plus the evidence-match function. */
 export interface ClassifyConfig extends SplitterConfig {
+  /** Replaces `defaultSupports`. */
   supports?: SupportsFn;
 }
 
+/** Per-sentence result of `classifySentence`/`classifyDocument`. */
 export interface SentenceClassification {
+  /** The sentence (grounding unit) text, exactly as produced by `splitSentences`. */
   sentence: string;
+  /** This sentence's grounding outcome; see `SentenceStatus` for the precedence rule. */
   status: SentenceStatus;
   /** Every marker id cited by this sentence, including invalid/forged ones. */
   citedIds: string[];
@@ -94,9 +126,16 @@ export function classifySentence(
   const validIds: string[] = [];
   let hasInvalid = false;
   for (const id of citedIds) {
-    const evidence = evidenceMap[id];
-    if (evidence === undefined) {
-      hasInvalid = true; // marker id doesn't exist in the evidence map
+    // Own-property lookup only. `evidenceMap` is a plain object, so a
+    // *prototype-chain* hit (marker id "__proto__", "constructor",
+    // "toString", ...) would otherwise resolve to Object.prototype's value
+    // for that name instead of `undefined` — handing `supports()` an object
+    // or function instead of a string and crashing it. `Object.hasOwn` plus
+    // a `typeof` guard treats any such id exactly like a genuinely-missing
+    // one: an invalid (forged/unknown) citation, never a thrown exception.
+    const evidence = Object.hasOwn(evidenceMap, id) ? evidenceMap[id] : undefined;
+    if (typeof evidence !== "string") {
+      hasInvalid = true; // marker id doesn't exist in the evidence map (or maps to a non-string)
       continue;
     }
     if (!supports(claimText, evidence)) {
@@ -118,8 +157,11 @@ export function classifySentence(
   return { sentence, status: "ungrounded", citedIds, validIds };
 }
 
+/** Whole-document result of `classifyDocument`. */
 export interface DocumentClassification {
+  /** Every sentence's classification, in document order. */
   sentences: SentenceClassification[];
+  /** How many sentences landed in each status. */
   counts: Record<SentenceStatus, number>;
   /** Distinct evidence ids that were genuinely (validly) cited anywhere in the document. */
   citedEvidenceIds: string[];
