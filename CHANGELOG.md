@@ -36,6 +36,10 @@ First release. Not yet published to npm; install from git (see README).
   (`DEFAULT_ABBREVIATIONS`) or safe for direct reuse including `.test()`
   (the two regexes — the library always clones them internally, so a
   caller's own use of the same object is never corrupted).
+  `DEFAULT_ABBREVIATIONS.contextFuse` includes `"am"`, `"pm"`, and `"us"`,
+  so "9 a.m." and "the U.S." no longer split mid-sentence by default; they
+  are in `contextFuse`, not `alwaysFuse`, so "I am." and "They told us."
+  still correctly end a sentence when followed by a capitalized fragment.
 - Zero runtime dependencies. ESM only, Node >= 20.
 
 ### Notes

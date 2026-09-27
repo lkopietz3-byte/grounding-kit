@@ -52,7 +52,8 @@ See the README's "Limits" section in full. In short: `defaultSupports` is
 normalized substring/word-overlap matching, not semantic entailment or
 truth-checking; the sentence splitter is a heuristic (its default
 abbreviation list is small and does not cover every common abbreviation,
-e.g. "a.m."/"U.S." are not in it); and `isClean`/`grounded` describe
+e.g. month names like "Jan." or degree suffixes like "Ph.D." are not in
+it); and `isClean`/`grounded` describe
 "passed this library's mechanical structural check," never "verified true."
 
 ## Release and rollback
