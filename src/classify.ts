@@ -6,6 +6,7 @@ import {
   stripCitationMarkers,
   type SplitterConfig,
 } from "./sentenceSplitter.js";
+import { assertEvidenceMap, assertString } from "./validate.js";
 
 /**
  * A sentence's grounding outcome, in precedence order (checked in this
@@ -110,12 +111,20 @@ export interface SentenceClassification {
  * "I don't know."
  *
  * Status precedence: invalid > placeholder > grounded > ungrounded.
+ *
+ * @throws {TypeError} if `sentence` is not a string, or `evidenceMap` is not
+ *   a non-null, non-array object. Checked up front rather than left to fail
+ *   inside the citation loop, where — before this check existed — a bad
+ *   `evidenceMap` only crashed for a sentence that actually cited something,
+ *   so the same call could throw or silently "succeed" depending on the text.
  */
 export function classifySentence(
   sentence: string,
   evidenceMap: EvidenceMap,
   config: ClassifyConfig = {},
 ): SentenceClassification {
+  assertString(sentence, "sentence");
+  assertEvidenceMap(evidenceMap, "evidenceMap");
   const markerPattern = config.markerPattern ?? DEFAULT_MARKER_PATTERN;
   const placeholderPattern = config.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
   const supports = config.supports ?? defaultSupports;
@@ -174,12 +183,20 @@ export interface DocumentClassification {
  * `evidenceMap`. Returns a document-level summary (counts per status) plus
  * the full per-sentence breakdown, so a caller can both gate on `isClean`
  * and surface exactly which sentences need a human look.
+ *
+ * @throws {TypeError} if `text` is not a string, or `evidenceMap` is not a
+ *   non-null, non-array object — checked up front, including for an empty
+ *   `text` (zero sentences), which would otherwise never reach the per-
+ *   sentence check inside `classifySentence` and so never validate
+ *   `evidenceMap` at all.
  */
 export function classifyDocument(
   text: string,
   evidenceMap: EvidenceMap,
   config: ClassifyConfig = {},
 ): DocumentClassification {
+  assertString(text, "text");
+  assertEvidenceMap(evidenceMap, "evidenceMap");
   const sentences = splitSentences(text, config).map((sentence) =>
     classifySentence(sentence, evidenceMap, config),
   );

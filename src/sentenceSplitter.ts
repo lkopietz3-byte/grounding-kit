@@ -11,6 +11,8 @@
 // and the abbreviation-fusion list. Ship your own of each for your domain;
 // the defaults are deliberately generic.
 
+import { assertString } from "./validate.js";
+
 /** Controls which trailing periods do NOT end a sentence. */
 export interface AbbreviationConfig {
   /**
@@ -307,6 +309,7 @@ function splitGroundingUnits(
  *  - malformed/unbalanced brackets (fails closed: never suppresses a split)
  */
 export function splitSentences(text: string, config: SplitterConfig = {}): string[] {
+  assertString(text, "text");
   const abbreviations = config.abbreviations ?? DEFAULT_ABBREVIATIONS;
   const markerPattern = config.markerPattern ?? DEFAULT_MARKER_PATTERN;
   const placeholderPattern = config.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
