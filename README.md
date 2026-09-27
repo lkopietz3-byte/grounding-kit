@@ -57,15 +57,11 @@ have real evidence in hand and need to grade how much it's worth.
 
 ## Install
 
-Not yet published to npm. Until it is, install from the git repository
-(the exact command depends on where you host it — GitHub, a private
-remote, or a local path):
-
 ```bash
-npm install git+https://github.com/lkopietz3-byte/grounding-kit.git
+npm install grounding-kit
 ```
 
-or clone it and build locally:
+Or build from source:
 
 ```bash
 git clone https://github.com/lkopietz3-byte/grounding-kit.git
