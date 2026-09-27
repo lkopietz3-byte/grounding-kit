@@ -14,7 +14,9 @@
 //      changes are always a deliberate diff.
 //   6. Run scripts/consumer-probe.mjs (required, kit-specific) from the
 //      consumer project, importing the package by name like a real user.
-//   7. If scripts/consumer-probe.mts exists, compile it with strict
+//   7. If scripts/consumer-probe.cjs exists, require() the tarball from a
+//      plain CommonJS file, proving require(esm) interop actually works.
+//   8. If scripts/consumer-probe.mts exists, compile it with strict
 //      NodeNext settings against the installed declarations.
 //
 // No network access is needed and no package lifecycle scripts run.
@@ -127,6 +129,19 @@ if (!updateApi) {
 copyFileSync(probe, join(consumer, 'probe.mjs'));
 run(process.execPath, ['probe.mjs'], consumer);
 
+// 6b. CommonJS require() proof -------------------------------------------------------
+// The consumer project's package.json says "type": "module", but a .cjs file
+// is always CommonJS regardless of the nearest package.json, so this proves
+// what a real require(esm) CommonJS consumer gets: require(pkg.name) working
+// against the packed tarball's "default" exports condition.
+const cjsProbe = join(root, 'scripts', 'consumer-probe.cjs');
+let commonjsRequireChecked = false;
+if (existsSync(cjsProbe)) {
+  copyFileSync(cjsProbe, join(consumer, 'probe.cjs'));
+  run(process.execPath, ['probe.cjs'], consumer);
+  commonjsRequireChecked = true;
+}
+
 // 7. Optional strict type probe --------------------------------------------------------------
 const typeProbe = join(root, 'scripts', 'consumer-probe.mts');
 let typeChecked = false;
@@ -147,5 +162,6 @@ console.log(JSON.stringify({
   tarballSha256: createHash('sha256').update(readFileSync(tarball)).digest('hex'),
   importedEntries: entries,
   apiSurfaceChecked: !updateApi,
+  commonjsRequireChecked,
   strictDeclarationsChecked: typeChecked,
 }));
