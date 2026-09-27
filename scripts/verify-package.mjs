@@ -28,7 +28,7 @@ import {
   copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -81,6 +81,26 @@ run('npm', [
 ]);
 writeFileSync(join(consumer, 'package.json'), JSON.stringify({ type: 'module', private: true, dependencies: { [pkg.name]: `file:${tarball}` } }));
 const installed = join(consumer, 'node_modules', ...pkg.name.split('/'));
+
+// 3b. Every shipped source map's sources actually resolve --------------------
+// A .js.map/.d.ts.map pointing at a ../src/*.ts that isn't in the tarball
+// silently breaks go-to-definition and trips webpack's source-map-loader.
+// Each source must either be inlined (sourcesContent) or itself shipped.
+const mapFiles = packed.filter((p) => p.endsWith('.map'));
+for (const mapPath of mapFiles) {
+  const mapAbsPath = join(installed, mapPath);
+  const map = JSON.parse(readFileSync(mapAbsPath, 'utf8'));
+  const sources = map.sources ?? [];
+  const sourcesContent = map.sourcesContent ?? [];
+  sources.forEach((source, index) => {
+    const inlined = typeof sourcesContent[index] === 'string' && sourcesContent[index].length > 0;
+    const shipped = existsSync(join(dirname(mapAbsPath), source));
+    assert.ok(
+      inlined || shipped,
+      `${mapPath}: source "${source}" is neither inlined (sourcesContent) nor shipped in the tarball`,
+    );
+  });
+}
 
 // 4. Every exports entry imports and has declarations -----------------------------
 const entries = [];
