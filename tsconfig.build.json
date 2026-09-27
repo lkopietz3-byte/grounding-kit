@@ -4,9 +4,12 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
-    "declarationMap": true,
+    "declarationMap": false,
     "sourceMap": true,
-    "noEmit": false
+    "noEmit": false,
+    "inlineSources": true
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

@@ -5,9 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-27
+
+### Fixed
+
+- `classifySentence(text, null)` and `classifyDocument(123, {})` crashed with
+  a raw native error (e.g. "Cannot convert undefined or null to object", or
+  "text.matchAll is not a function") instead of this kit's own named
+  `TypeError`. `classifySentence`'s bad `evidenceMap` was previously only
+  touched inside the per-citation loop, so the same call could throw or
+  silently return a result depending on whether the sentence cited anything;
+  it's now checked up front, in `classifySentence`, `classifyDocument`, and
+  `splitSentences`.
+- The shipped `.js.map` pointed at `../src/*.ts`, which isn't in the
+  published tarball. `tsconfig.build.json` now sets `inlineSources`, so the
+  map embeds the original source. `.d.ts.map` generation is turned off
+  instead of shipping `src/`.
+
+### Added
+
+- CommonJS `require()` support: `package.json` `exports` now has a
+  `"default"` condition alongside `"import"`, so `require("grounding-kit")`
+  works on Node versions that support `require(esm)` (>=20.19.0, >=22.12.0).
+  `scripts/consumer-probe.cjs`, run by `verify-package.mjs`, guards it in CI.
+- A "Relationship to sibling kits" section in the README, cross-linking
+  `provenance-kit` and `corroboration-kit`.
+
 ## [0.1.0] - 2026-09-27
 
-First release. Not yet published to npm; install from git (see README).
+First release.
 
 ### Added
 
