@@ -42,6 +42,14 @@ export const DEFAULT_ABBREVIATIONS: AbbreviationConfig = Object.freeze({
   contextFuse: Object.freeze([
     "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
     "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
+    // "am"/"pm"/"us" belong here, never in alwaysFuse: they are common
+    // English WORDS ("I am.", "They told us.") as often as they are
+    // abbreviations ("9 a.m.", "the U.S."), and only contextFuse's
+    // next-fragment check (capitalized = real sentence end, lower-case/digit
+    // = continues) tells the two apart. alwaysFuse has no such check, so it
+    // would unconditionally fuse "I am." into whatever follows it, silently
+    // swallowing a real sentence end.
+    "am", "pm", "us",
   ]),
 });
 

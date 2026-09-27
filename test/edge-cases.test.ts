@@ -90,15 +90,15 @@ describe("fuzz categories: abbreviations, decimals, URLs, initials, unicode scri
     ]);
   });
 
-  it("does not fuse 'a.m.'/'p.m.' — not in the default list", () => {
+  it("fuses 'a.m.'/'p.m.' via the contextFuse list (lower-case continuation, round 2)", () => {
     expect(splitSentences("The meeting is at 9 a.m. sharp.")).toEqual([
-      "The meeting is at 9 a.m.", "sharp.",
+      "The meeting is at 9 a.m. sharp.",
     ]);
   });
 
-  it("does not fuse 'U.S.' — not in the default list ('us' is absent from both fuse lists)", () => {
+  it("fuses 'U.S.' via the contextFuse list (lower-case continuation, round 2)", () => {
     expect(splitSentences("The U.S. economy grew.")).toEqual([
-      "The U.S.", "economy grew.",
+      "The U.S. economy grew.",
     ]);
   });
 
@@ -155,5 +155,75 @@ describe("fuzz categories: abbreviations, decimals, URLs, initials, unicode scri
     // itself is never lost or mis-split.
     const text = "Mr. Smith arrived. Then he left.";
     expect(splitSentences(text)).toEqual(["Mr. Smith arrived.", "Then he left."]);
+  });
+});
+
+describe("round 2: 'am'/'pm'/'us' added to contextFuse, not alwaysFuse", () => {
+  // contextFuse (not alwaysFuse) is the only safe list for these three: it
+  // only treats the trailing period as non-terminal when the NEXT fragment
+  // continues in lower-case or a digit. A capitalized next fragment is read
+  // as a genuine new sentence, so the pronoun/word forms below ("I am.",
+  // "told us.") still end a sentence exactly as before. alwaysFuse would get
+  // this wrong unconditionally and was rejected for that reason.
+
+  it("does not swallow a real sentence end: 'I am.' still splits", () => {
+    expect(splitSentences("I am. Then we left.")).toEqual([
+      "I am.",
+      "Then we left.",
+    ]);
+  });
+
+  it("does not swallow a real sentence end: 'told us.' still splits", () => {
+    expect(splitSentences("They told us. Then it rained.")).toEqual([
+      "They told us.",
+      "Then it rained.",
+    ]);
+  });
+
+  it("fuses 'a.m.' mid-sentence: 'Meet at 9 a.m. tomorrow.' does not split", () => {
+    expect(splitSentences("Meet at 9 a.m. tomorrow.")).toEqual([
+      "Meet at 9 a.m. tomorrow.",
+    ]);
+  });
+
+  it("fuses 'U.S.' mid-sentence: 'the U.S. economy' does not split", () => {
+    expect(splitSentences("Growth in the U.S. economy slowed this year.")).toEqual([
+      "Growth in the U.S. economy slowed this year.",
+    ]);
+  });
+
+  it("matches case-insensitively: 'A.M.'/'P.M.'/'U.S.' (uppercase) fuse the same way", () => {
+    expect(splitSentences("Meet at 9 A.M. tomorrow.")).toEqual([
+      "Meet at 9 A.M. tomorrow.",
+    ]);
+    expect(splitSentences("It runs until 5 P.M. daily.")).toEqual([
+      "It runs until 5 P.M. daily.",
+    ]);
+    // Note: a capitalized continuation ("The U.S. Congress...") is NOT used
+    // here — contextFuse can't (and isn't meant to) tell that apart from a
+    // real sentence end, the same known limitation "Corp." already has.
+    expect(splitSentences("The U.S. economy is slowing.")).toEqual([
+      "The U.S. economy is slowing.",
+    ]);
+  });
+
+  it("uppercase pronoun/word forms still split on a real sentence end", () => {
+    expect(splitSentences("I AM. THEN WE LEFT.")).toEqual([
+      "I AM.",
+      "THEN WE LEFT.",
+    ]);
+  });
+
+  it("sentence-final 'a.m.'/'p.m.'/'U.S.' with nothing after: no fusion needed, stays intact", () => {
+    // contextFuse only fuses when there IS a following fragment; at the true
+    // end of the text there's nothing to fuse with, so this is just a
+    // normal, correctly-terminated single sentence.
+    expect(splitSentences("It ended at 5 p.m.")).toEqual(["It ended at 5 p.m."]);
+    expect(splitSentences("Doors open at 9 a.m.")).toEqual(["Doors open at 9 a.m."]);
+    expect(splitSentences("She works for the U.S.")).toEqual(["She works for the U.S."]);
+  });
+
+  it("sentence-final 'us.' with nothing after also stays a single, intact sentence", () => {
+    expect(splitSentences("They gave it to us.")).toEqual(["They gave it to us."]);
   });
 });

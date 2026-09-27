@@ -18,6 +18,7 @@ describe("DEFAULT_ABBREVIATIONS", () => {
     expect(DEFAULT_ABBREVIATIONS.contextFuse).toEqual([
       "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
       "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
+      "am", "pm", "us",
     ]);
   });
 
