@@ -6,16 +6,20 @@
 // What it does, in order:
 //   1. `npm pack` the built package (run `npm run build` first).
 //   2. Fail if the tarball contains anything outside the intended file set
-//      (tests, configs, CI files, env files, node_modules).
+//      (tests, configs, CI files, env files, node_modules), or ships a source
+//      map whose sources resolve to nothing a consumer received.
 //   3. Install that tarball into an empty temp project, offline, no scripts.
 //   4. Import every `exports` entry by its public specifier, and check that
-//      each declared types file exists.
+//      each declared types file exists. If every entry declares a "default" or
+//      "require" condition, require() each one too and check it exposes the
+//      same names as import() (on Node versions with require(esm) support).
 //   5. Compare the exported names to the committed api-surface.json, so API
 //      changes are always a deliberate diff.
 //   6. Run scripts/consumer-probe.mjs (required, kit-specific) from the
 //      consumer project, importing the package by name like a real user.
-//   7. If scripts/consumer-probe.cjs exists, require() the tarball from a
-//      plain CommonJS file, proving require(esm) interop actually works.
+//   7. If scripts/consumer-probe.cjs exists, `require()` the package from a
+//      plain CommonJS consumer, on a Node version that supports
+//      require(esm) (20.19+/22.12+) — otherwise this step is skipped.
 //   8. If scripts/consumer-probe.mts exists, compile it with strict
 //      NodeNext settings against the installed declarations.
 //
@@ -28,7 +32,7 @@ import {
   copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -74,6 +78,39 @@ for (const required of ['package.json', 'README.md', 'LICENSE']) {
 }
 assert.ok(packed.some((p) => p.startsWith('dist/')), 'Tarball has no dist/ output; run npm run build first');
 
+// 2b. Every source map's `sources` entry must resolve for a consumer: either
+// that source file is itself shipped in the tarball, or the map embeds its
+// text via a non-empty `sourcesContent` entry. `tsc` does not delete outputs
+// it stopped emitting (e.g. a stale .d.ts.map from before declarationMap was
+// turned off), so this also catches dist/ not being rebuilt from clean.
+const packedSet = new Set(packed);
+const mapProblems = [];
+for (const mapPath of packed.filter((p) => p.endsWith('.map'))) {
+  const map = JSON.parse(readFileSync(join(root, mapPath), 'utf8'));
+  const sources = Array.isArray(map.sources) ? map.sources : [];
+  const sourcesContent = Array.isArray(map.sourcesContent) ? map.sourcesContent : [];
+  const mapDir = mapPath.split('/').slice(0, -1);
+  sources.forEach((src, i) => {
+    const parts = [...mapDir, ...String(src).split('/')];
+    const resolved = [];
+    for (const part of parts) {
+      if (part === '.' || part === '') continue;
+      if (part === '..') resolved.pop();
+      else resolved.push(part);
+    }
+    const shipped = packedSet.has(resolved.join('/'));
+    const embedded = typeof sourcesContent[i] === 'string' && sourcesContent[i].length > 0;
+    if (!shipped && !embedded) {
+      mapProblems.push(`${mapPath}: source "${src}" resolves to "${resolved.join('/')}", which is neither shipped nor embedded via sourcesContent`);
+    }
+  });
+}
+assert.deepEqual(
+  mapProblems,
+  [],
+  `Broken source map(s) in the tarball (stale dist/? rebuild from clean, or check inlineSources):\n${mapProblems.join('\n')}`,
+);
+
 // 3. Install into a clean consumer --------------------------------------------
 run('npm', [
   'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
@@ -81,26 +118,6 @@ run('npm', [
 ]);
 writeFileSync(join(consumer, 'package.json'), JSON.stringify({ type: 'module', private: true, dependencies: { [pkg.name]: `file:${tarball}` } }));
 const installed = join(consumer, 'node_modules', ...pkg.name.split('/'));
-
-// 3b. Every shipped source map's sources actually resolve --------------------
-// A .js.map/.d.ts.map pointing at a ../src/*.ts that isn't in the tarball
-// silently breaks go-to-definition and trips webpack's source-map-loader.
-// Each source must either be inlined (sourcesContent) or itself shipped.
-const mapFiles = packed.filter((p) => p.endsWith('.map'));
-for (const mapPath of mapFiles) {
-  const mapAbsPath = join(installed, mapPath);
-  const map = JSON.parse(readFileSync(mapAbsPath, 'utf8'));
-  const sources = map.sources ?? [];
-  const sourcesContent = map.sourcesContent ?? [];
-  sources.forEach((source, index) => {
-    const inlined = typeof sourcesContent[index] === 'string' && sourcesContent[index].length > 0;
-    const shipped = existsSync(join(dirname(mapAbsPath), source));
-    assert.ok(
-      inlined || shipped,
-      `${mapPath}: source "${source}" is neither inlined (sourcesContent) nor shipped in the tarball`,
-    );
-  });
-}
 
 // 4. Every exports entry imports and has declarations -----------------------------
 const entries = [];
@@ -121,6 +138,31 @@ for (const spec of ${JSON.stringify(entries)}) {
 console.log(JSON.stringify(out));
 `);
 const surface = JSON.parse(run(process.execPath, ['surface.mjs'], consumer));
+
+// 4b. require() agrees with import() for every exports entry -------------------------
+// A "default" or "require" condition next to "import" promises CommonJS consumers
+// can require() the entry on Node versions with require(esm) (20.19+/22.12+).
+// A .cjs file is CommonJS regardless of the consumer's "type", so no extra project.
+const exportTargets = pkg.exports && typeof pkg.exports === 'object' ? Object.values(pkg.exports) : [];
+const declaresCommonJs = exportTargets.length > 0 && exportTargets.every(
+  (target) => target !== null && typeof target === 'object' && ('default' in target || 'require' in target),
+);
+let requireSurfaceChecked = false;
+if (declaresCommonJs && supportsRequireEsm(process.versions.node)) {
+  writeFileSync(join(consumer, 'require-surface.cjs'), `
+const assert = require('node:assert/strict');
+const out = {};
+for (const spec of ${JSON.stringify(entries)}) {
+  const keys = Object.keys(require(spec)).sort();
+  assert.ok(keys.length > 0, \`require(\${spec}) returned no exports\`);
+  out[spec] = keys;
+}
+console.log(JSON.stringify(out));
+`);
+  const requireSurface = JSON.parse(run(process.execPath, ['require-surface.cjs'], consumer));
+  assert.deepEqual(requireSurface, surface, 'require() and import() disagree on the exported names for one or more entries');
+  requireSurfaceChecked = true;
+}
 
 // 5. Public API surface is a deliberate diff ---------------------------------------
 const surfacePath = join(root, 'api-surface.json');
@@ -149,20 +191,31 @@ if (!updateApi) {
 copyFileSync(probe, join(consumer, 'probe.mjs'));
 run(process.execPath, ['probe.mjs'], consumer);
 
-// 6b. CommonJS require() proof -------------------------------------------------------
-// The consumer project's package.json says "type": "module", but a .cjs file
-// is always CommonJS regardless of the nearest package.json, so this proves
-// what a real require(esm) CommonJS consumer gets: require(pkg.name) working
-// against the packed tarball's "default" exports condition.
+// 7. Optional CommonJS require() smoke test, on Node versions that support it -----------------
 const cjsProbe = join(root, 'scripts', 'consumer-probe.cjs');
-let commonjsRequireChecked = false;
+let commonjsChecked = false;
 if (existsSync(cjsProbe)) {
-  copyFileSync(cjsProbe, join(consumer, 'probe.cjs'));
-  run(process.execPath, ['probe.cjs'], consumer);
-  commonjsRequireChecked = true;
+  if (supportsRequireEsm(process.versions.node)) {
+    // The .cjs extension makes Node treat this as CommonJS regardless of the
+    // consumer project's own package.json "type": "module".
+    copyFileSync(cjsProbe, join(consumer, 'probe.cjs'));
+    run(process.execPath, ['probe.cjs'], consumer);
+    commonjsChecked = true;
+  } else {
+    console.log(`Skipping CommonJS require() probe: Node ${process.versions.node} predates require(esm) support (20.19+/22.12+).`);
+  }
 }
 
-// 7. Optional strict type probe --------------------------------------------------------------
+/** Node 20.19+ and 22.12+ (and every 23+) support `require()` of an ESM package. */
+function supportsRequireEsm(version) {
+  const [major, minor] = version.split('.').map(Number);
+  if (major > 22) return true;
+  if (major === 22) return minor >= 12;
+  if (major === 20) return minor >= 19;
+  return false;
+}
+
+// 8. Optional strict type probe --------------------------------------------------------------
 const typeProbe = join(root, 'scripts', 'consumer-probe.mts');
 let typeChecked = false;
 if (existsSync(typeProbe)) {
@@ -182,6 +235,7 @@ console.log(JSON.stringify({
   tarballSha256: createHash('sha256').update(readFileSync(tarball)).digest('hex'),
   importedEntries: entries,
   apiSurfaceChecked: !updateApi,
-  commonjsRequireChecked,
+  commonjsChecked,
+  requireSurfaceChecked,
   strictDeclarationsChecked: typeChecked,
 }));
