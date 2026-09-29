@@ -18,6 +18,7 @@ const configs: Array<[string, SplitterConfig]> = [
     { markerPattern: /\[(\d+)\]/g, placeholderPattern: /\[(?:tbd|unsourced)\]/i },
   ],
   ["braces, no brackets", { markerPattern: /\{\{ref:(\w+)\}\}/, placeholderPattern: /\{\{gap\}\}/ }],
+  ["marker ending in a period", { markerPattern: /#(\d+)\./g }],
   [
     "custom abbreviations",
     { abbreviations: { alwaysFuse: ["dr", "sra"], contextFuse: ["etc", "no"] } },
@@ -60,6 +61,7 @@ const fixtures = [
   "Claim. [[cite:e1]] [[cite:e2]] Second. [[cite:e3]]",
   "Note [1]. Another [2]; a third [3]: and more [4].",
   "Ref {{ref:a}}; clause {{ref:b}}.{{ref:c}}Next.",
+  "A #1.#2. B #3.Next. Last.",
 ];
 
 const words = [
@@ -71,7 +73,7 @@ const glue = [" ", " ", " ", " ", "  ", "\n", "", ""];
 const stops = [".", ".", "!", "?", "。", "！", ";", "—", ":", ",", ".."];
 const marks = [
   "[[cite:e1]]", "[[cite:e2]]", "[[cite: e3 ]]", "[citation needed]", "[TK]",
-  "[more research needed: x]", "[1]", "[22]", "[tbd]", "{{ref:a}}", "{{gap}}",
+  "[more research needed: x]", "[1]", "[22]", "[tbd]", "{{ref:a}}", "{{gap}}", "#1.", "#22.",
 ];
 const brackets = ["[", "]", "[x]", "[a; b]", "[[", "]]", "[ ", " ]"];
 

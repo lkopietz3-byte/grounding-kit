@@ -4,7 +4,12 @@
 // because a .cjs extension always forces CommonJS. Run by verify-package.mjs.
 const assert = require('node:assert/strict');
 
-const { splitSentences, classifySentence, classifyDocument } = require('grounding-kit');
+const {
+  splitSentences,
+  classifySentence,
+  classifyDocument,
+  GroundingConfigError,
+} = require('grounding-kit');
 
 const sentences = splitSentences('Dr. Alvarez reviewed the unit. It shipped the next day.');
 assert.deepEqual(sentences, ['Dr. Alvarez reviewed the unit.', 'It shipped the next day.']);
@@ -18,5 +23,12 @@ assert.equal(grounded.status, 'grounded');
 
 const doc = classifyDocument('The device is waterproof [[cite:e99]].', evidence);
 assert.equal(doc.sentences[0].status, 'invalid');
+
+// The stricter boundaries hold through require() too.
+assert.throws(
+  () => classifySentence('Claim [[cite:e1]].', evidence, { supports: () => Promise.resolve(true) }),
+  GroundingConfigError,
+);
+assert.throws(() => splitSentences('abc', { markerPattern: /()/g }), GroundingConfigError);
 
 console.log('CommonJS require() probe passed');

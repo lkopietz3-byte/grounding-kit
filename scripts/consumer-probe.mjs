@@ -13,6 +13,7 @@ const {
   stripCitationMarkers,
   defaultSupports,
   DEFAULT_ABBREVIATIONS,
+  GroundingConfigError,
 } = await import("grounding-kit");
 
 // --- splitSentences: abbreviation fusion + leading-marker peeling ---------
@@ -65,6 +66,42 @@ assert.equal(
   defaultSupports("Café closed early.".normalize("NFC"), "The café closed early.".normalize("NFD")),
   true,
 );
+
+// --- GK-F01: nested brackets are linear (100,000 characters, generous budget) --
+const nested = "[".repeat(50_000) + "x" + "]".repeat(50_000);
+const nestedStart = Date.now();
+assert.deepEqual(splitSentences(nested), [nested]);
+assert.ok(Date.now() - nestedStart < 2000, "nested brackets must not be quadratic");
+
+// --- GK-F02: a zero-length marker is a named error, not a hang ------------
+assert.throws(
+  () => splitSentences("abc", { markerPattern: /()/g }),
+  (error) => error instanceof GroundingConfigError && error instanceof TypeError,
+);
+
+// --- GK-F03: a sticky marker flag does not hide a missing citation --------
+const sticky = /\[\[cite:([\w-]+)\]\]/gy;
+sticky.lastIndex = 3;
+const stickyDoc = classifyDocument("Claim [[cite:missing]] [citation needed].", {}, { markerPattern: sticky });
+assert.equal(stickyDoc.sentences[0].status, "invalid");
+assert.equal(stickyDoc.isClean, false);
+assert.equal(sticky.lastIndex, 3, "the caller's regex must not be touched");
+
+// --- GK-F04: supports() must return a boolean; a Promise is not "true" ----
+assert.throws(
+  () => classifySentence("Claim [[cite:e1]].", evidence, { supports: async () => false }),
+  GroundingConfigError,
+);
+assert.equal(classifySentence("Claim [[cite:e1]].", evidence, { supports: () => false }).status, "invalid");
+
+// --- an invisible character cannot hide a sentence boundary --------------
+assert.deepEqual(splitSentences("It happens occasionally.\u200b[[cite:e1]] The claimant lost $500,000."), [
+  "It happens occasionally. \u200b[[cite:e1]]",
+  "The claimant lost $500,000.",
+]);
+
+// --- a Map is not an evidence map -----------------------------------------
+assert.throws(() => classifySentence("Claim [[cite:e1]].", new Map()), TypeError);
 
 // --- DEFAULT_ABBREVIATIONS is frozen ---------------------------------------
 assert.equal(Object.isFrozen(DEFAULT_ABBREVIATIONS), true);

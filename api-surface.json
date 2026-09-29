@@ -3,6 +3,7 @@
     "DEFAULT_ABBREVIATIONS",
     "DEFAULT_MARKER_PATTERN",
     "DEFAULT_PLACEHOLDER_PATTERN",
+    "GroundingConfigError",
     "classifyDocument",
     "classifySentence",
     "defaultSupports",

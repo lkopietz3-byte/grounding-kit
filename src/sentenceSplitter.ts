@@ -145,15 +145,10 @@ function copyPattern(value: unknown, label: string): { source: string; flags: st
   return { source, flags };
 }
 
+// A private global, non-sticky copy of a pattern. Any other flag is kept.
 function globalCopy(value: unknown, label: string): RegExp {
   const { source, flags } = copyPattern(value, label);
-  const kept = flags.replace(/[gy]/g, "");
-  return new RegExp(source, `${kept}g`);
-}
-
-function plainCopy(value: unknown, label: string): RegExp {
-  const { source, flags } = copyPattern(value, label);
-  return new RegExp(source, flags.replace(/[gy]/g, ""));
+  return new RegExp(source, `${flags.replace(/[gy]/g, "")}g`);
 }
 
 /**
@@ -179,7 +174,6 @@ function scanMarkers(text: string, re: RegExp): RegExpExecArray[] {
 
 // `text` with the given (ordered, non-overlapping) matches cut out.
 function removeMatches(text: string, matches: readonly RegExpExecArray[]): string {
-  if (matches.length === 0) return text;
   let out = "";
   let last = 0;
   for (const m of matches) {
@@ -187,6 +181,16 @@ function removeMatches(text: string, matches: readonly RegExpExecArray[]): strin
     last = m.index + m[0].length;
   }
   return out + text.slice(last);
+}
+
+// The placeholder pattern is used two ways: a global copy to find every
+// placeholder while splitting, and a non-global, non-sticky copy for the
+// per-sentence `.test` (a global or sticky regex would carry `lastIndex`
+// from one sentence to the next).
+function placeholderCopies(value: unknown): { global: RegExp; plain: RegExp } {
+  const { source, flags } = copyPattern(value, "placeholderPattern");
+  const kept = flags.replace(/[gy]/g, "");
+  return { global: new RegExp(source, `${kept}g`), plain: new RegExp(source, kept) };
 }
 
 /** A splitter configuration read once and validated: private regex copies and dense, lower-cased word sets. */
@@ -214,18 +218,19 @@ export function resolveSplitter(options: {
   const contextFuse = readStringList(abbreviations.contextFuse, "abbreviations.contextFuse");
   const markerPattern = options.markerPattern ?? DEFAULT_MARKER_PATTERN;
   const placeholderPattern = options.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
+  const placeholder = placeholderCopies(placeholderPattern);
   return {
     alwaysFuse: new Set(alwaysFuse.map((w) => w.toLowerCase())),
     contextFuse: new Set(contextFuse.map((w) => w.toLowerCase())),
     marker: globalCopy(markerPattern, "markerPattern"),
-    placeholderGlobal: globalCopy(placeholderPattern, "placeholderPattern"),
-    placeholderTest: plainCopy(placeholderPattern, "placeholderPattern"),
+    placeholderGlobal: placeholder.global,
+    placeholderTest: placeholder.plain,
   };
 }
 
 function resolveSplitterConfig(config: unknown): ResolvedSplitter {
-  const source = config === undefined ? {} : config;
-  assertPlainObject(source, "config");
+  assertPlainObject(config, "config");
+  const source = config;
   return resolveSplitter({
     abbreviations: source.abbreviations,
     markerPattern: source.markerPattern,
@@ -253,7 +258,7 @@ function normalizeMarkerAdjacency(text: string, marker: RegExp): string {
     const before = text.slice(last, start);
     result += before;
     if (before.length > 0) tail = before[before.length - 1];
-    if (tail !== "" && TERMINATOR_CLASS.test(tail)) {
+    if (TERMINATOR_CLASS.test(tail)) {
       result += " ";
     }
     result += m[0];
@@ -375,15 +380,16 @@ function peelLeadingMarkers(
     }
     if (m.index !== lead) break;
     const end = lead + m[0].length;
-    collected.push(rest.slice(0, end).trimStart());
+    collected.push(rest.slice(0, end));
     rest = rest.slice(end).trimStart();
   }
   marker.lastIndex = 0;
   return { markers: collected.join(" "), rest };
 }
 
-// Whether a unit shows anything to a reader. A unit of only whitespace and
-// invisible characters is not a claim, so it is never emitted.
+// Whether a unit shows nothing to a reader: empty, or only whitespace,
+// invisible and control characters. Such a unit is not a claim, so it is never
+// emitted.
 function isBlank(unit: string): boolean {
   return BLANK.test(unit);
 }
@@ -464,12 +470,12 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
       markerEndCounts[i] - markerEndCounts[start] > 0;
     if (ch === ";" || ch === "—" || isColonBoundary) {
       const unit = sentence.slice(start, i).trim();
-      if (unit && !isBlank(unit)) units.push(unit);
+      if (!isBlank(unit)) units.push(unit);
       start = i + 1;
     }
   }
   const last = sentence.slice(start).trim();
-  if (last && !isBlank(last)) units.push(last);
+  if (!isBlank(last)) units.push(last);
   return units;
 }
 
@@ -502,12 +508,12 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): string[
       // keeps each check O(that part's length) and the whole loop O(n).
       if (!endsOnFalseBoundary(parts[i], parts[i + 1], alwaysFuse, contextFuse)) {
         const trimmed = buffer.trim();
-        if (trimmed && !isBlank(trimmed)) sentences.push(trimmed);
+        if (!isBlank(trimmed)) sentences.push(trimmed);
         buffer = "";
       }
     }
     const trimmed = buffer.trim();
-    if (trimmed && !isBlank(trimmed)) sentences.push(trimmed);
+    if (!isBlank(trimmed)) sentences.push(trimmed);
   }
 
   // Clause-level split so an uncited clause can't ride a cited one inside the
@@ -536,7 +542,7 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): string[
       // bare punctuation (e.g. a lone "!"), deleting real content from the
       // output instead of just an empty string. Only a remainder that shows
       // nothing (invisible characters alone) is dropped.
-      if (rest && !isBlank(rest)) merged.push(rest);
+      if (!isBlank(rest)) merged.push(rest);
       continue;
     }
     // Trailing citation-only fragment (marker after the period, on its own).

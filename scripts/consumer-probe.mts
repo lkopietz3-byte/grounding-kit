@@ -11,6 +11,7 @@ import {
   stripCitationMarkers,
   defaultSupports,
   DEFAULT_ABBREVIATIONS,
+  GroundingConfigError,
   type ClassifyConfig,
   type DocumentClassification,
   type EvidenceMap,
@@ -58,6 +59,14 @@ const stripped: string = stripCitationMarkers(sentences[0]);
 const supported: boolean = defaultSupports("battery life", "battery life reached 14 hours");
 const alwaysFuse: readonly string[] = DEFAULT_ABBREVIATIONS.alwaysFuse;
 
+// The named error is a class that extends TypeError.
+const configError: TypeError = new GroundingConfigError("example");
+const errorName: string = configError.name;
+
+// SupportsFn is synchronous: an async function must not be assignable.
+// @ts-expect-error Promise<boolean> is not assignable to boolean
+const asyncSupports: SupportsFn = async () => true;
+
 // Reference every binding so `noUnusedLocals` (inherited via the probe's own
 // strict compile) has nothing to flag.
 if (
@@ -71,7 +80,9 @@ if (
   stripped === "__unreachable__" ||
   supported === undefined ||
   isClean === undefined ||
-  withCustomSupports.sentence === "__unreachable__"
+  withCustomSupports.sentence === "__unreachable__" ||
+  errorName === "__unreachable__" ||
+  asyncSupports === undefined
 ) {
   throw new Error("unreachable: type probe sanity check");
 }

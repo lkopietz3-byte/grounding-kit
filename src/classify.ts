@@ -84,7 +84,8 @@ export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
 
   const claimWords = new Set(claim.split(" ").filter((w) => w.length > 3));
   if (claimWords.size === 0) return false;
-  const evidenceWords = new Set(evidence.split(" ").filter((w) => w.length > 3));
+  // Only the claim's significant words are looked up, so short evidence words never matter.
+  const evidenceWords = new Set(evidence.split(" "));
 
   let overlap = 0;
   for (const w of claimWords) if (evidenceWords.has(w)) overlap++;
@@ -122,8 +123,8 @@ interface ResolvedClassify {
 // plain objects: a Map or class instance would read as "no options" and
 // silently fall back to the defaults.
 function resolveClassify(config: unknown): ResolvedClassify {
-  const source = config === undefined ? {} : config;
-  assertPlainObject(source, "config");
+  assertPlainObject(config, "config");
+  const source = config;
   const supports = source.supports ?? defaultSupports;
   if (typeof supports !== "function") {
     throw new TypeError(`config.supports must be a function (got ${describe(supports)}).`);

@@ -1,6 +1,6 @@
 {
   "name": "grounding-kit",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Deterministic, zero-dependency sentence-level citation-grounding checker for AI-generated text. Splits text into sentences and classifies each as grounded, placeholder, ungrounded, or invalid (forged citation) — no LLM judge required.",
   "keywords": [
     "citation",

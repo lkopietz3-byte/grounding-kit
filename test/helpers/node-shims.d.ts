@@ -6,3 +6,4 @@ declare module "node:vm" {
 }
 
 declare function setTimeout(handler: (value: unknown) => void, ms?: number): unknown;
+declare const performance: { now(): number };

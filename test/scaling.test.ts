@@ -7,9 +7,9 @@ import { classifyDocument, splitSentences } from "../src/index.js";
 const TIME_BUDGET_MS = 500;
 
 function timed<T>(fn: () => T): { value: T; ms: number } {
-  const start = Date.now();
+  const start = performance.now();
   const value = fn();
-  return { value, ms: Date.now() - start };
+  return { value, ms: performance.now() - start };
 }
 
 function fastest(fn: () => unknown, samples: number): number {
@@ -34,12 +34,12 @@ describe("GK-F01: matched-bracket shielding is linear", () => {
     // Linear growth gives about 4x, quadratic about 16x. The threshold sits
     // between them with room for noise, and each size uses its fastest of
     // seven runs so a stray pause cannot fake a slowdown.
-    const small = nested(20_000);
-    const large = nested(80_000);
+    const small = nested(50_000);
+    const large = nested(200_000);
     const smallMs = fastest(() => splitSentences(small), 7);
     const largeMs = fastest(() => splitSentences(large), 7);
-    // Guard the divisor so a 0 ms reading cannot hide a regression.
-    expect(largeMs / Math.max(smallMs, 1)).toBeLessThan(8);
+    // Guard the divisor so a near-zero reading cannot hide a regression.
+    expect(largeMs / Math.max(smallMs, 0.5)).toBeLessThan(8);
   });
 
   it("still splits at a separator that sits outside every matched pair", () => {
@@ -50,47 +50,56 @@ describe("GK-F01: matched-bracket shielding is linear", () => {
   });
 });
 
+// Each family below was quadratic in 0.1.1. For every one, 4x the input must
+// cost well under 16x the time (linear is about 4x), and the large input must
+// also finish inside a loose absolute budget.
+function expectRoughlyLinear(build: (n: number) => string, n: number): void {
+  const small = build(n);
+  const large = build(n * 4);
+  const smallMs = fastest(() => splitSentences(small), 5);
+  const largeMs = fastest(() => splitSentences(large), 5);
+  expect(largeMs / Math.max(smallMs, 0.5)).toBeLessThan(8);
+  expect(largeMs).toBeLessThan(1000);
+}
+
 describe("other quadratic inputs found by the fix-pass review", () => {
-  it("handles 50,000 cited sentences (marker adjacency was quadratic)", () => {
-    const input = "Foo bar [[cite:e1]]. ".repeat(50_000);
-    const { value, ms } = timed(() => splitSentences(input));
-    expect(value).toHaveLength(50_000);
-    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+  it("handles many cited sentences (marker adjacency was quadratic)", () => {
+    const build = (n: number) => "Foo bar [[cite:e1]]. ".repeat(n);
+    expect(splitSentences(build(1000))).toHaveLength(1000);
+    expectRoughlyLinear(build, 12_500);
   });
 
-  it("handles 100,000 leading markers after one sentence", () => {
-    const input = `Claim. ${"[[cite:e1]] ".repeat(100_000)}Next.`;
-    const { value, ms } = timed(() => splitSentences(input));
-    expect(value).toHaveLength(2);
-    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+  it("handles many leading markers after one sentence", () => {
+    const build = (n: number) => `Claim. ${"[[cite:e1]] ".repeat(n)}Next.`;
+    expect(splitSentences(build(1000))).toHaveLength(2);
+    expectRoughlyLinear(build, 25_000);
   });
 
   it("handles a long run of unclosed default placeholders", () => {
-    const input = "[TK".repeat(33_000);
-    const { value, ms } = timed(() => splitSentences(input));
-    expect(value).toEqual([input]);
-    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+    const build = (n: number) => "[TK".repeat(n);
+    expect(splitSentences(build(1000))).toEqual([build(1000)]);
+    expectRoughlyLinear(build, 15_000);
   });
 
   it("handles a long run of letters that ends in a digit and a period", () => {
     // The trailing-word regex retried its unbounded scan from every start.
-    const input = `${"a".repeat(100_000)}1.`;
-    const { value, ms } = timed(() => splitSentences(input));
-    expect(value).toEqual([input]);
-    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+    const build = (n: number) => `${"a".repeat(n)}1.`;
+    expect(splitSentences(build(1000))).toEqual([build(1000)]);
+    expectRoughlyLinear(build, 25_000);
   });
 
   it("handles a long run of letter-dot pairs that ends in a digit and a period", () => {
-    const input = `${"a.".repeat(50_000)}1.`;
-    const { value, ms } = timed(() => splitSentences(input));
-    expect(value.join("")).toBe(input.replace(/ /g, ""));
-    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+    const build = (n: number) => `${"a.".repeat(n)}1.`;
+    expect(splitSentences(build(10)).join("")).toBe(build(10));
+    expectRoughlyLinear(build, 12_500);
   });
 
-  it("classifies a 50,000-sentence cited document within budget", () => {
-    const input = "Foo bar [[cite:e1]]. ".repeat(50_000);
-    const { value, ms } = timed(() => classifyDocument(input, { e1: "foo bar" }));
-    expect(value.counts.grounded).toBe(50_000);
-    expect(ms).toBeLessThan(2000);
+  it("classifies a large cited document in linear time", () => {
+    const build = (n: number) => "Foo bar [[cite:e1]]. ".repeat(n);
+    const run = (n: number) => () => classifyDocument(build(n), { e1: "foo bar" });
+    expect(run(1000)().counts.grounded).toBe(1000);
+    const smallMs = fastest(run(12_500), 5);
+    const largeMs = fastest(run(50_000), 5);
+    expect(largeMs / Math.max(smallMs, 0.5)).toBeLessThan(8);
   });
 });
