@@ -10,6 +10,8 @@ export {
   type SplitterConfig,
 } from "./sentenceSplitter.js";
 
+export { GroundingConfigError } from "./errors.js";
+
 export {
   classifySentence,
   classifyDocument,
