@@ -110,3 +110,19 @@ describe("other quadratic inputs found by the fix-pass review", () => {
     expect(largeMs / Math.max(smallMs, 0.5)).toBeLessThan(SCALING_LIMIT);
   });
 });
+
+describe("classify cost with a repeated citation id (supports() ran once per citation)", () => {
+  it("classifies 20,000 repeats of one id in a single sentence within a generous budget", () => {
+    // The default supports() normalizes the whole claim text, so calling it
+    // once per citation cost (citations x sentence length): about 10 s on a
+    // developer laptop.
+    // Once per distinct id it is a single pass. The budget is far above what a
+    // slow CI runner needs and far below the old cost.
+    const input = "word [[cite:e1]] ".repeat(20_000);
+    const { value, ms } = timed(() => classifyDocument(input, { e1: "word" }));
+    expect(value.sentences).toHaveLength(1);
+    expect(value.sentences[0]?.citedIds).toHaveLength(20_000);
+    expect(value.counts.grounded).toBe(1);
+    expect(ms).toBeLessThan(5_000);
+  });
+});

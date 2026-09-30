@@ -24,12 +24,15 @@
 4. Classification is deterministic: same input -> same output, independent
    of `evidenceMap` key insertion order, with no `Date.now`/`Math.random`
    anywhere in the library.
-5. No known quadratic-time input as of 2026-09-28 for the default patterns
-   (seven O(n²) inputs have been found and fixed — see CHANGELOG). Empirical,
-   not a formal proof; each fixed case has a regression test, and the
-   nested-bracket family has a hard 100,000-character time budget plus a
-   4x-input scaling check. A caller-supplied regex that backtracks badly is
-   the caller's configuration and is not covered.
+5. No known quadratic-time input to `splitSentences` as of 2026-09-28 for the
+   default patterns (seven O(n²) inputs have been found and fixed — see
+   CHANGELOG). Empirical, not a formal proof; each fixed case has a regression
+   test, and the nested-bracket family has a hard 100,000-character time budget
+   plus a scaling check. A caller-supplied regex that backtracks badly is the
+   caller's configuration and is not covered. Classification is not linear in
+   the worst case: `supports` runs once per distinct cited id per sentence, so
+   one sentence costs about (distinct ids) x (sentence length) with the default
+   `supports`, and one id repeated many times costs one call.
 6. Internal code never mutates a caller-supplied `RegExp` (or the
    `lastIndex` of `DEFAULT_MARKER_PATTERN`/`DEFAULT_PLACEHOLDER_PATTERN`):
    it scans with a private global, non-sticky copy. `DEFAULT_ABBREVIATIONS`

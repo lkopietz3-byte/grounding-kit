@@ -362,3 +362,63 @@ describe("option validation", () => {
     ).toEqual(["Prof. Ito spoke.", "Then left."]);
   });
 });
+
+describe("supports() runs once per distinct cited id within a sentence", () => {
+  const map: Record<string, string> = { a: "alpha text", b: "beta text", c: "gamma text" };
+
+  it("a repeated id in one sentence costs one callback call, not one per citation", () => {
+    const calls: string[] = [];
+    const supports = (_claim: string, text: string): boolean => {
+      calls.push(text);
+      return true;
+    };
+    const result = classifySentence("Claim [[cite:a]] more [[cite:b]] more [[cite:a]] and [[cite:a]] [[cite:b]].", map, { supports });
+    expect(calls).toEqual(["alpha text", "beta text"]);
+    // citedIds and validIds still list every citation, repeats included.
+    expect(result.citedIds).toEqual(["a", "b", "a", "a", "b"]);
+    expect(result.validIds).toEqual(["a", "b", "a", "a", "b"]);
+    expect(result.status).toBe("grounded");
+  });
+
+  it("the same id in two different sentences is judged once per sentence, because the claim text differs", () => {
+    const claims: string[] = [];
+    const supports = (claim: string): boolean => {
+      claims.push(claim);
+      return true;
+    };
+    classifyDocument("First claim [[cite:a]] [[cite:a]]. Second claim [[cite:a]] [[cite:a]].", map, { supports });
+    expect(claims).toEqual(["First claim.", "Second claim."]);
+  });
+
+  it("a rejected id stays rejected for every repeat, and later ids are still judged", () => {
+    const calls: string[] = [];
+    const supports = (_claim: string, text: string): boolean => {
+      calls.push(text);
+      return text !== "alpha text";
+    };
+    const result = classifySentence("X [[cite:a]] [[cite:b]] [[cite:a]].", map, { supports });
+    expect(calls).toEqual(["alpha text", "beta text"]);
+    expect(result.status).toBe("invalid");
+    expect(result.validIds).toEqual(["b"]);
+  });
+
+  it("matches a per-citation evaluation for a pure callback, over seeded random sentences", () => {
+    let seed = 20260930;
+    const rand = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const ids = ["a", "b", "c", "zzz"]; // zzz is not in the map
+    const pure = (claim: string, text: string): boolean => (claim.length + text.length) % 3 !== 0;
+    for (let trial = 0; trial < 200; trial++) {
+      const cites = Array.from({ length: 1 + Math.floor(rand() * 6) }, () => ids[Math.floor(rand() * ids.length)]);
+      const sentence = `Claim${"x".repeat(Math.floor(rand() * 5))} ${cites.map((id) => `[[cite:${id}]]`).join(" and ")}.`;
+      const result = classifySentence(sentence, map, { supports: pure });
+      const claim = stripCitationMarkers(sentence);
+      const expectedValid = cites.filter((id) => Object.hasOwn(map, id) && pure(claim, map[id]));
+      expect(result.citedIds).toEqual(cites);
+      expect(result.validIds).toEqual(expectedValid);
+      expect(result.status).toBe(expectedValid.length === cites.length ? "grounded" : "invalid");
+    }
+  });
+});
