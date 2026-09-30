@@ -239,6 +239,20 @@ document with no checkable sentences at all (empty text, whitespace, or a
 lone marker). Check `counts.placeholder` and `sentences.length` before you
 treat it as "done".
 
+**Cost.** Within a sentence, `supports` is called once per distinct cited id,
+however many times that id repeats, so a sentence that cites `e1` twenty
+thousand times costs one call. The default `supports` reads the whole sentence
+on every call, so classifying one sentence costs about (distinct ids in the
+sentence) x (sentence length). Measured on a developer laptop with the default
+`supports`: a 340,000-character sentence that repeats one id 20,000 times took
+about 10 ms, and a 154,000-character sentence citing 1,000 different ids took
+about 1.7 s (2,000 ids in 169,000 characters: about 3.2 s). Text made of many short cited sentences
+grows about linearly with its length (a scaling test covers this), but one
+very long sentence that cites many different ids does not: its cost grows with
+ids x length. A slow `supports` (an embedding or model call) multiplies that by
+the number of distinct ids per sentence. The "linear" claim under
+`splitSentences` covers splitting only, not classification.
+
 `config` and `evidenceMap` are read once per call: the same patterns,
 `supports` function and evidence values apply to every sentence, even if you
 pass getters or a Proxy. `evidenceMap` must be a plain object or a
@@ -271,6 +285,9 @@ classifyDocument(text, evidence, { supports: embeddingSupports });
 
 An NLI-style entailment model works the same way: return `true` only when
 `evidenceText` entails `sentenceText` (not merely relates to it).
+
+Within one sentence `supports` is called once per distinct cited id (a repeated
+id reuses the first answer), so don't count on the number of calls.
 
 `supports` must be synchronous and must return a real `boolean`. Anything
 else (a `Promise` from an `async` function, the string `"false"`, `0`, `1`,

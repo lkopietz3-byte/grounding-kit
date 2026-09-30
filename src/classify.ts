@@ -44,6 +44,10 @@ export type EvidenceMap = Readonly<Record<string, string>>;
  * naive default. See the README's "Limits" section before relying on the
  * default in anything higher-stakes than a demo.
  *
+ * Within one sentence it is called once per distinct cited id (a repeated id
+ * reuses the first answer); a later sentence asks again, because its claim
+ * text differs. Don't rely on the number of calls.
+ *
  * It must return a real boolean, synchronously. Any other return value (a
  * Promise from an `async` function, a truthy string, `undefined`, a number)
  * makes classification throw `GroundingConfigError`: the kit never awaits the
@@ -179,19 +183,25 @@ function classifyResolved(
   const citedIds = citedIdsOf(sentence, splitter.marker);
   const claimText = stripMarkersOf(sentence, splitter.marker);
 
+  // `supports` sees the same claim text for every citation in this sentence, so
+  // its answer depends only on the cited id. Judge each distinct id once and
+  // reuse the verdict for its repeats: a sentence that repeats one id N times
+  // costs one callback call, not N. (For a pure callback the result is the
+  // same as calling it every time.)
+  const verdicts = new Map<string, boolean>();
   const validIds: string[] = [];
   let hasInvalid = false;
   for (const id of citedIds) {
-    const evidence = lookup(id);
-    if (evidence === undefined) {
-      hasInvalid = true; // marker id doesn't exist in the evidence map (or maps to a non-string)
-      continue;
+    let valid = verdicts.get(id);
+    if (valid === undefined) {
+      const evidence = lookup(id);
+      // A missing id (or one that maps to a non-string) is invalid without
+      // asking `supports`; an existing id is valid only if `supports` agrees.
+      valid = evidence !== undefined && callSupports(supports, claimText, evidence);
+      verdicts.set(id, valid);
     }
-    if (!callSupports(supports, claimText, evidence)) {
-      hasInvalid = true; // marker exists but doesn't support the claim
-      continue;
-    }
-    validIds.push(id);
+    if (valid) validIds.push(id);
+    else hasInvalid = true;
   }
 
   if (hasInvalid) return { sentence, status: "invalid", citedIds, validIds };
@@ -213,6 +223,10 @@ function classifyResolved(
  * "I don't have a source."
  *
  * Status precedence: invalid > placeholder > grounded > ungrounded.
+ *
+ * Cost: `supports` runs once per distinct cited id, however many times the id
+ * repeats, so the work is about (distinct ids) x (sentence length) with the
+ * default `supports`, which reads the whole sentence on every call.
  *
  * @throws {TypeError} if `sentence` is not a string, `evidenceMap` is not a
  *   plain (or null-prototype) object, or an option in `config` has the wrong
@@ -258,6 +272,11 @@ export interface DocumentClassification {
  *
  * `config` and `evidenceMap` are read once for the whole document: the same
  * patterns, `supports` function and evidence values apply to every sentence.
+ *
+ * Cost: per sentence, about (distinct cited ids) x (sentence length) with the
+ * default `supports`; a repeated id costs one call. The sum over a document of
+ * short sentences grows with the text length, but one very long sentence that
+ * cites many different ids does not (see the README).
  *
  * @throws {TypeError} if `text` is not a string, `evidenceMap` is not a plain
  *   (or null-prototype) object, or an option in `config` has the wrong type —

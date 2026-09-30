@@ -88,6 +88,16 @@ keep their signatures; `GroundingConfigError` is new.
   separating space, because only the first UTF-16 unit was tested.
 - Error messages describe a value by kind only and cannot throw on a
   BigInt, a revoked Proxy or an object with a throwing `toString`.
+- **`supports` ran once per citation, not once per distinct id.** A sentence
+  that repeated one id 20,000 times (`"word [[cite:e1]] ".repeat(20000)`)
+  called the default `supports` 20,000 times on the same claim text, which took
+  about 10 s in `classifyDocument` on a developer laptop (the review measured
+  about 36 s). Within a sentence, `supports` is now called once per distinct
+  cited id and its answer is reused for repeats (the same input takes about
+  10 ms). Results are identical for a pure callback; a callback that counts its
+  calls now sees fewer of them. Classification cost is about (distinct ids per
+  sentence) x (sentence length), and README and ENGINEERING.md now say so
+  instead of implying linear work for classification.
 
 ### Added
 
