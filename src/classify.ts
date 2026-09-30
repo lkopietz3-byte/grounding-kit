@@ -1,12 +1,13 @@
+import { GroundingConfigError } from "./errors.js";
 import {
-  DEFAULT_MARKER_PATTERN,
-  DEFAULT_PLACEHOLDER_PATTERN,
-  extractCitedIds,
-  splitSentences,
-  stripCitationMarkers,
+  citedIdsOf,
+  resolveSplitter,
+  splitResolved,
+  stripMarkersOf,
+  type ResolvedSplitter,
   type SplitterConfig,
 } from "./sentenceSplitter.js";
-import { assertEvidenceMap, assertString } from "./validate.js";
+import { assertPlainObject, assertString, describe } from "./validate.js";
 
 /**
  * A sentence's grounding outcome, in precedence order (checked in this
@@ -42,6 +43,11 @@ export type EvidenceMap = Readonly<Record<string, string>>;
  * similarity, an NLI entailment model, a second LLM call) instead of the
  * naive default. See the README's "Limits" section before relying on the
  * default in anything higher-stakes than a demo.
+ *
+ * It must return a real boolean, synchronously. Any other return value (a
+ * Promise from an `async` function, a truthy string, `undefined`, a number)
+ * makes classification throw `GroundingConfigError`: the kit never awaits the
+ * result and never guesses what a non-boolean was meant to say.
  */
 export type SupportsFn = (sentenceText: string, evidenceText: string) => boolean;
 
@@ -78,16 +84,21 @@ export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
 
   const claimWords = new Set(claim.split(" ").filter((w) => w.length > 3));
   if (claimWords.size === 0) return false;
-  const evidenceWords = new Set(evidence.split(" ").filter((w) => w.length > 3));
+  // Only the claim's significant words are looked up, so short evidence words never matter.
+  const evidenceWords = new Set(evidence.split(" "));
 
   let overlap = 0;
   for (const w of claimWords) if (evidenceWords.has(w)) overlap++;
   return overlap / claimWords.size >= 0.6;
 };
 
-/** Options for `classifySentence`/`classifyDocument`: splitting config plus the evidence-match function. */
+/**
+ * Options for `classifySentence`/`classifyDocument`: splitting config plus the
+ * evidence-match function. Each option is read once per call, so a getter or
+ * Proxy cannot answer differently for the second sentence of a document.
+ */
 export interface ClassifyConfig extends SplitterConfig {
-  /** Replaces `defaultSupports`. */
+  /** Replaces `defaultSupports`. Must return a real boolean; see `SupportsFn`. */
   supports?: SupportsFn;
 }
 
@@ -103,51 +114,80 @@ export interface SentenceClassification {
   validIds: string[];
 }
 
-/**
- * Classify a single sentence against `evidenceMap`. A hallucinated or forged
- * citation ("invalid") outranks a placeholder: a sentence that cites a
- * missing or non-supporting marker id surfaces as invalid even if it also
- * contains a placeholder gap, so a bad cite can never hide behind an honest
- * "I don't know."
- *
- * Status precedence: invalid > placeholder > grounded > ungrounded.
- *
- * @throws {TypeError} if `sentence` is not a string, or `evidenceMap` is not
- *   a non-null, non-array object. Checked up front rather than left to fail
- *   inside the citation loop, where — before this check existed — a bad
- *   `evidenceMap` only crashed for a sentence that actually cited something,
- *   so the same call could throw or silently "succeed" depending on the text.
- */
-export function classifySentence(
-  sentence: string,
-  evidenceMap: EvidenceMap,
-  config: ClassifyConfig = {},
-): SentenceClassification {
-  assertString(sentence, "sentence");
-  assertEvidenceMap(evidenceMap, "evidenceMap");
-  const markerPattern = config.markerPattern ?? DEFAULT_MARKER_PATTERN;
-  const placeholderPattern = config.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
-  const supports = config.supports ?? defaultSupports;
+interface ResolvedClassify {
+  splitter: ResolvedSplitter;
+  supports: SupportsFn;
+}
 
-  const citedIds = extractCitedIds(sentence, markerPattern);
-  const claimText = stripCitationMarkers(sentence, markerPattern);
+// Read every option once and validate it. `config` and `abbreviations` must be
+// plain objects: a Map or class instance would read as "no options" and
+// silently fall back to the defaults.
+function resolveClassify(config: unknown): ResolvedClassify {
+  assertPlainObject(config, "config");
+  const source = config;
+  const supports = source.supports ?? defaultSupports;
+  if (typeof supports !== "function") {
+    throw new TypeError(`config.supports must be a function (got ${describe(supports)}).`);
+  }
+  return {
+    splitter: resolveSplitter({
+      abbreviations: source.abbreviations,
+      markerPattern: source.markerPattern,
+      placeholderPattern: source.placeholderPattern,
+    }),
+    supports: supports as SupportsFn,
+  };
+}
+
+// Own-property lookup, read at most once per id per call. `evidenceMap` is a
+// plain object, so a *prototype-chain* hit (marker id "__proto__",
+// "constructor", "toString", ...) would otherwise resolve to Object.prototype's
+// value for that name instead of `undefined` — handing `supports()` an object
+// or function instead of a string and crashing it. `Object.hasOwn` plus a
+// `typeof` guard treats any such id exactly like a genuinely-missing one: an
+// invalid (forged/unknown) citation, never a thrown exception. Caching means a
+// getter on the map cannot return one value for the first citation of an id
+// and another for the second.
+function evidenceLookup(evidenceMap: EvidenceMap): (id: string) => string | undefined {
+  const cache = new Map<string, string | undefined>();
+  return (id) => {
+    if (cache.has(id)) return cache.get(id);
+    const raw: unknown = Object.hasOwn(evidenceMap, id) ? evidenceMap[id] : undefined;
+    const value = typeof raw === "string" ? raw : undefined;
+    cache.set(id, value);
+    return value;
+  };
+}
+
+function callSupports(supports: SupportsFn, claimText: string, evidence: string): boolean {
+  const result: unknown = supports(claimText, evidence);
+  if (typeof result === "boolean") return result;
+  // A rejected Promise that nobody awaits would crash the process with an
+  // unhandled rejection on top of the error thrown here. Mark it handled; the
+  // TypeError below is the report.
+  if (result instanceof Promise) result.catch(() => undefined);
+  throw new GroundingConfigError(
+    `supports() must return a boolean (got ${result instanceof Promise ? "a Promise; supports() must be synchronous" : describe(result)}).`,
+  );
+}
+
+function classifyResolved(
+  sentence: string,
+  lookup: (id: string) => string | undefined,
+  { splitter, supports }: ResolvedClassify,
+): SentenceClassification {
+  const citedIds = citedIdsOf(sentence, splitter.marker);
+  const claimText = stripMarkersOf(sentence, splitter.marker);
 
   const validIds: string[] = [];
   let hasInvalid = false;
   for (const id of citedIds) {
-    // Own-property lookup only. `evidenceMap` is a plain object, so a
-    // *prototype-chain* hit (marker id "__proto__", "constructor",
-    // "toString", ...) would otherwise resolve to Object.prototype's value
-    // for that name instead of `undefined` — handing `supports()` an object
-    // or function instead of a string and crashing it. `Object.hasOwn` plus
-    // a `typeof` guard treats any such id exactly like a genuinely-missing
-    // one: an invalid (forged/unknown) citation, never a thrown exception.
-    const evidence = Object.hasOwn(evidenceMap, id) ? evidenceMap[id] : undefined;
-    if (typeof evidence !== "string") {
+    const evidence = lookup(id);
+    if (evidence === undefined) {
       hasInvalid = true; // marker id doesn't exist in the evidence map (or maps to a non-string)
       continue;
     }
-    if (!supports(claimText, evidence)) {
+    if (!callSupports(supports, claimText, evidence)) {
       hasInvalid = true; // marker exists but doesn't support the claim
       continue;
     }
@@ -156,14 +196,41 @@ export function classifySentence(
 
   if (hasInvalid) return { sentence, status: "invalid", citedIds, validIds };
 
-  const flags = placeholderPattern.flags.replace(/[gy]/g, "");
-  const freshPlaceholder = new RegExp(placeholderPattern.source, flags);
-  if (freshPlaceholder.test(sentence)) {
+  splitter.placeholderTest.lastIndex = 0;
+  if (splitter.placeholderTest.test(sentence)) {
     return { sentence, status: "placeholder", citedIds, validIds };
   }
 
   if (citedIds.length > 0) return { sentence, status: "grounded", citedIds, validIds };
   return { sentence, status: "ungrounded", citedIds, validIds };
+}
+
+/**
+ * Classify a single sentence against `evidenceMap`. A hallucinated or forged
+ * citation ("invalid") outranks a placeholder: a sentence that cites a
+ * missing or non-supporting marker id surfaces as invalid even if it also
+ * contains a placeholder gap, so a bad cite can never hide behind an honest
+ * "I don't have a source."
+ *
+ * Status precedence: invalid > placeholder > grounded > ungrounded.
+ *
+ * @throws {TypeError} if `sentence` is not a string, `evidenceMap` is not a
+ *   plain (or null-prototype) object, or an option in `config` has the wrong
+ *   type. Checked up front rather than left to fail inside the citation loop,
+ *   where — before this check existed — a bad `evidenceMap` only crashed for
+ *   a sentence that actually cited something, so the same call could throw or
+ *   silently "succeed" depending on the text.
+ * @throws {GroundingConfigError} if `markerPattern` matches zero characters,
+ *   or `supports` returns anything but a boolean.
+ */
+export function classifySentence(
+  sentence: string,
+  evidenceMap: EvidenceMap,
+  config: ClassifyConfig = {},
+): SentenceClassification {
+  assertString(sentence, "sentence");
+  assertPlainObject(evidenceMap, "evidenceMap");
+  return classifyResolved(sentence, evidenceLookup(evidenceMap), resolveClassify(config));
 }
 
 /** Whole-document result of `classifyDocument`. */
@@ -174,7 +241,12 @@ export interface DocumentClassification {
   counts: Record<SentenceStatus, number>;
   /** Distinct evidence ids that were genuinely (validly) cited anywhere in the document. */
   citedEvidenceIds: string[];
-  /** True only when there are zero ungrounded and zero invalid sentences. */
+  /**
+   * True only when there are zero ungrounded and zero invalid sentences. This
+   * is a structural result, not a verdict: placeholders (unresolved gaps) do
+   * not block it, and a document with no checkable sentences at all is also
+   * `true`. Look at `counts` and `sentences.length` before publishing.
+   */
   isClean: boolean;
 }
 
@@ -184,11 +256,16 @@ export interface DocumentClassification {
  * the full per-sentence breakdown, so a caller can both gate on `isClean`
  * and surface exactly which sentences need a human look.
  *
- * @throws {TypeError} if `text` is not a string, or `evidenceMap` is not a
- *   non-null, non-array object — checked up front, including for an empty
- *   `text` (zero sentences), which would otherwise never reach the per-
- *   sentence check inside `classifySentence` and so never validate
+ * `config` and `evidenceMap` are read once for the whole document: the same
+ * patterns, `supports` function and evidence values apply to every sentence.
+ *
+ * @throws {TypeError} if `text` is not a string, `evidenceMap` is not a plain
+ *   (or null-prototype) object, or an option in `config` has the wrong type —
+ *   checked up front, including for an empty `text` (zero sentences), which
+ *   would otherwise never reach the per-sentence check and so never validate
  *   `evidenceMap` at all.
+ * @throws {GroundingConfigError} if `markerPattern` matches zero characters,
+ *   or `supports` returns anything but a boolean.
  */
 export function classifyDocument(
   text: string,
@@ -196,9 +273,11 @@ export function classifyDocument(
   config: ClassifyConfig = {},
 ): DocumentClassification {
   assertString(text, "text");
-  assertEvidenceMap(evidenceMap, "evidenceMap");
-  const sentences = splitSentences(text, config).map((sentence) =>
-    classifySentence(sentence, evidenceMap, config),
+  assertPlainObject(evidenceMap, "evidenceMap");
+  const resolved = resolveClassify(config);
+  const lookup = evidenceLookup(evidenceMap);
+  const sentences = splitResolved(text, resolved.splitter).map((sentence) =>
+    classifyResolved(sentence, lookup, resolved),
   );
 
   const counts: Record<SentenceStatus, number> = {

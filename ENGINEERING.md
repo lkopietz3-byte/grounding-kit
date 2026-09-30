@@ -10,24 +10,38 @@
    `Object.prototype` member (`"__proto__"`, `"constructor"`,
    `"toString"`, ...) or maps to a non-string value classifies as
    `invalid`; it never throws.
-3. `splitSentences` never silently loses a non-whitespace character, with
-   two documented exceptions: the separator character itself at an accepted
+3. `splitSentences` never silently loses a visible character, with three
+   documented exceptions: the separator character itself at an accepted
    `;` / em-dash / cited-colon clause boundary (consumed by design — see
-   README "Clause-level splitting"), and a leading citation marker with
+   README "Clause-level splitting"), a leading citation marker with
    nothing before it anywhere in the whole document (it can't ground
-   anything, so it's dropped). Covered by a seeded-PRNG property test.
-   Bracket matching for clause splitting fails closed: an unbalanced `[`
-   never suppresses a later real split.
+   anything, so it's dropped), and a unit made only of whitespace,
+   default-ignorable and control characters (it shows nothing, so it is not
+   a claim). Covered by a seeded-PRNG property test. Bracket matching for
+   clause splitting fails closed: an unbalanced `[` never suppresses a later
+   real split. A default-ignorable character right after a terminator, or in
+   front of a marker, cannot hide a boundary.
 4. Classification is deterministic: same input -> same output, independent
    of `evidenceMap` key insertion order, with no `Date.now`/`Math.random`
    anywhere in the library.
-5. No known quadratic-time input as of 2026-09-24 (three O(n²) inputs were
-   found by fuzzing and fixed — see CHANGELOG). Empirical, not a formal
-   proof; each fixed case has a hard-time-budget regression test.
-6. Internal code never mutates a caller-supplied `RegExp`, and never
-   mutates `DEFAULT_MARKER_PATTERN`/`DEFAULT_PLACEHOLDER_PATTERN`'s
-   `lastIndex`. `DEFAULT_ABBREVIATIONS` is frozen (object + both arrays).
+5. No known quadratic-time input as of 2026-09-28 for the default patterns
+   (seven O(n²) inputs have been found and fixed — see CHANGELOG). Empirical,
+   not a formal proof; each fixed case has a regression test, and the
+   nested-bracket family has a hard 100,000-character time budget plus a
+   4x-input scaling check. A caller-supplied regex that backtracks badly is
+   the caller's configuration and is not covered.
+6. Internal code never mutates a caller-supplied `RegExp` (or the
+   `lastIndex` of `DEFAULT_MARKER_PATTERN`/`DEFAULT_PLACEHOLDER_PATTERN`):
+   it scans with a private global, non-sticky copy. `DEFAULT_ABBREVIATIONS`
+   is frozen (object + both arrays).
 7. Zero runtime dependencies.
+8. A marker match of zero characters throws `GroundingConfigError`; the
+   marker scans never loop. A `supports` result that is not a real boolean
+   throws `GroundingConfigError`; it is never awaited or coerced.
+9. Caller input is read once. `config` options, abbreviation lists and each
+   evidence value are snapshotted per call, so a getter or Proxy cannot
+   answer differently for a later sentence. `config`, `abbreviations` and
+   `evidenceMap` must be plain or null-prototype objects.
 
 ## Setup and verification
 
@@ -43,8 +57,22 @@ real API, type-checks `scripts/consumer-probe.mts` under strict NodeNext,
 and diffs the exported names against `api-surface.json` so an API change is
 always a deliberate, reviewed diff (`--update-api` to accept one).
 
-CI (`.github/workflows/verify.yml`) runs this on every PR and push to `main`,
-plus a separate Node 20/22/24 compatibility job against the packed tarball.
+CI (`.github/workflows/verify.yml`) runs this on every PR and push to `main`
+(audit, lint, typecheck, test, build, `npm run attw`, package verification),
+plus a compatibility job that runs the build, tests and package verification
+(including the CommonJS `require()` probe) on Node 20, 20.19.0, 22, 22.12.0
+and 24. 20.19.0 and 22.12.0 are the documented `require(esm)` floors.
+
+`test/legacy/legacySplitter.ts` is a frozen copy of the 0.1.1 splitter. Only
+`test/differential.test.ts` uses it, to prove the linear rewrite returns the
+same output as the old code on fixtures and a seeded random corpus. Do not
+import it elsewhere.
+
+Mutation testing is run locally, not in CI: install
+`@stryker-mutator/core` and `@stryker-mutator/vitest-runner` with
+`npm i -D --no-save`, use a `stryker.config.json` that is not committed, and
+leave out `test/scaling.test.ts` (instrumented code is too slow for its time
+budgets).
 
 ## What this is NOT certified to do
 
@@ -105,9 +133,11 @@ This package has no server component and no migration state to reverse either wa
 `workflow_dispatch` or a pushed `v*` tag, requests a short-lived OIDC token instead of
 reading a stored npm token (`permissions: id-token: write`), and runs a plain `npm publish`
 with no token and no `--provenance` flag, because provenance attestation is generated
-automatically under trusted publishing. Before publishing, the workflow confirms the tag
-matches `package.json`'s `version` and checks whether that version is already on the
-registry, so re-running it on a version that's already published is a no-op rather than an
-error. Trusted publishing must be configured for this package on npmjs.com (linking it to this
+automatically under trusted publishing. Before publishing, the workflow requires
+the run to be on a `v*` tag (a manual run started from a branch fails), confirms the tag
+matches `package.json`'s `version`, runs `npm run audit:dependencies`, `npm run verify` and
+`npm run attw`, and checks whether that version is already on the registry. Only a confirmed
+`E404` counts as "not published"; any other registry error fails the job. Re-running it on a
+version that's already published is a no-op rather than an error. Trusted publishing must be configured for this package on npmjs.com (linking it to this
 GitHub repository and the `release.yml` workflow) before the first automated release will
 work.

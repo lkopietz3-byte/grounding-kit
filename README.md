@@ -24,36 +24,31 @@ report drafter, a RAG answer engine, anything that emits `"claim [[cite:e1]]"`
    at an id that doesn't exist at all. This is worse than an unsupported
    claim, because it reads as authoritative.
 
-Generic RAG-hallucination tools (RAGAS, TruLens, DeepEval, and similar) exist
-and are useful, but they're LLM-judge-based: they ask a model whether an
-answer seems grounded in retrieved context. They don't parse citation markers
-at the sentence level, they don't have a notion of "this specific marker is
-forged onto the wrong sentence," and they're not zero-dependency — you need
-an LLM call (and its cost, latency, and non-determinism) to get an answer.
+An LLM-judge approach asks a model whether an answer seems grounded in
+retrieved context. That can judge meaning, but every check costs a model call
+(money, latency, and answers that can vary between runs). This library does
+something narrower and more mechanical: it checks whether a citation
+**marker** in a piece of text points to the actual **evidence span** that is
+supposed to support that sentence, using a deterministic (non-LLM) parser. It
+never decides whether the evidence is true or whether the sentence follows
+from it.
 
-The closest academic relative is
-[CiteCheck (arXiv 2605.27700)](https://arxiv.org/abs/2605.27700), which
-checks whether a **cited paper** exists and matches its citing statement —
-a document/reference-level check. This library does something narrower and
-more mechanical: it checks whether a citation **marker** in a piece of text
-points to the actual **evidence span** that's supposed to support that
-sentence, using a deterministic (non-LLM) parser. It is not a substitute for
-CiteCheck's problem (paper-existence/matching) or for an LLM judge's problem
-(open-ended semantic grounding). It's a fast, free, offline first pass that
-catches a specific, mechanical, and surprisingly common failure: a citation
-marker sitting on the wrong sentence, or pointing at nothing.
+A related but different problem is checking the citations themselves:
+[CiteCheck (arXiv 2605.27700)](https://arxiv.org/abs/2605.27700) checks
+whether cited scholarly works exist and whether their metadata is faithful.
+This library does not look anything up. It is a fast, free, offline first pass
+that catches a specific, mechanical, and surprisingly common failure: a
+citation marker sitting on the wrong sentence, or pointing at nothing.
 
 Run it before an LLM judge, not instead of one, if your stakes justify both.
 
-**Relationship to corroboration-kit:** a sibling, similarly-shaped library
-that answers a different question. grounding-kit checks that a citation
-*marker* in generated text actually points at the evidence span it's
-supposed to (mechanical, sentence-level, no judgment about the evidence
-itself). corroboration-kit takes evidence *signals you've already collected*
-about a claim and grades how independently corroborated that claim is (2+
-independent sources vs. a single source vs. none). Use grounding-kit to catch
-a forged or misattributed citation marker; use corroboration-kit once you
-have real evidence in hand and need to grade how much it's worth.
+**Relationship to corroboration-kit:** a sibling library that answers a
+different question. grounding-kit checks that a citation *marker* in generated
+text points at the evidence span it is supposed to (mechanical, sentence-level,
+no judgment about the evidence itself). corroboration-kit applies fixed rules
+to signals you have already collected and labeled, and returns a verdict
+bounded by the coverage you report; it trusts your labels and is not
+independent verification. See "Relationship to sibling kits" below.
 
 ## Install
 
@@ -61,18 +56,29 @@ have real evidence in hand and need to grade how much it's worth.
 npm install grounding-kit
 ```
 
-Or build from source:
+Zero runtime dependencies. Ships TypeScript declarations. Or build from
+source:
 
 ```bash
 git clone https://github.com/lkopietz3-byte/grounding-kit.git
 cd grounding-kit
-npm install
+npm ci
 npm run build
 ```
 
-Zero runtime dependencies either way — nothing else gets pulled in. ESM
-package, Node >= 20; CommonJS `require("grounding-kit")` also works on Node
-versions that support `require(esm)` (>=20.19.0, >=22.12.0).
+It is an ESM package (`"type": "module"`). `import` is the supported way to
+load it. `require()` also works where Node can `require(esm)`:
+
+| How you load it | Node 20.19+ | Node 22.12+ | Node 24 and 26 | Older Node 20 or 22 |
+| --- | --- | --- | --- | --- |
+| `import { classifyDocument } from "grounding-kit"` | works | works | works | works |
+| `require("grounding-kit")` | works | works | works | fails (no `require(esm)`); use `import()` |
+
+Recommended runtimes are Node 22 and 24 (LTS) and Node 26 (current). Node 20 is
+end-of-life. CI still runs the tests and the installed-package probes on Node
+20.19.0 and 22.12.0 (the `require(esm)` floors) to catch regressions, but that
+is compatibility testing, not a recommendation. `engines` in `package.json` is
+`>=20`.
 
 ## Quick start
 
@@ -141,6 +147,19 @@ actually grounds. Hardened against:
 - **Fail-closed bracket matching** — an unbalanced `[` never suppresses a
   later clause split. Erring toward more (smaller) units is always safe: it
   can only ask for more grounding, never launder a claim past the checker.
+- **Invisible characters** — a zero-width space, bidi control, soft hyphen or
+  other default-ignorable character placed right after a terminator, or in
+  front of a marker, cannot hide a sentence boundary. A unit made only of
+  whitespace and invisible characters is dropped instead of being returned as
+  an "uncited claim". (Besides whitespace, `splitSentences` drops only those
+  blank units, the clause separator itself at a `;`, em-dash or cited-colon
+  boundary, and a marker with nothing before it; see ENGINEERING.md.)
+
+Work is linear in the length of `text` for the default patterns, including
+deeply nested brackets, long runs of markers, and unclosed `[TK` runs. A
+pattern you supply can still be slow if its own regex backtracks badly.
+Throws a `TypeError` for a non-string `text`, a `config` that is not a plain
+object, or an option of the wrong type (see "Errors" below).
 
 ```ts
 import { splitSentences, DEFAULT_ABBREVIATIONS } from "grounding-kit";
@@ -214,6 +233,18 @@ review) until it's `true`. `placeholder` is not a failure — it's the honest
 alternative to fabricating, and should be surfaced for a human to fill in,
 not silently accepted or silently rejected.
 
+`isClean` is a structural result, not a verdict. It is `true` for a document
+whose only findings are placeholders (unresolved gaps), and also for a
+document with no checkable sentences at all (empty text, whitespace, or a
+lone marker). Check `counts.placeholder` and `sentences.length` before you
+treat it as "done".
+
+`config` and `evidenceMap` are read once per call: the same patterns,
+`supports` function and evidence values apply to every sentence, even if you
+pass getters or a Proxy. `evidenceMap` must be a plain object or a
+null-prototype object; a `Map`, `Set`, `Date`, array or class instance throws
+a `TypeError` instead of being read as an empty map.
+
 ### Configuring the `supports()` check
 
 ```ts
@@ -241,6 +272,14 @@ classifyDocument(text, evidence, { supports: embeddingSupports });
 An NLI-style entailment model works the same way: return `true` only when
 `evidenceText` entails `sentenceText` (not merely relates to it).
 
+`supports` must be synchronous and must return a real `boolean`. Anything
+else (a `Promise` from an `async` function, the string `"false"`, `0`, `1`,
+`undefined`, an object) throws `GroundingConfigError`. The kit never awaits
+the result and never guesses what a non-boolean meant, because a truthy
+`Promise` would otherwise read as "supported". If your judge is async, run it
+first and pass the answers in through a synchronous lookup. An exception
+thrown inside `supports` propagates unchanged.
+
 ### Configuring the marker/placeholder syntax
 
 Both are plain regexes, so you can match whatever your generator already
@@ -253,10 +292,26 @@ splitSentences(text, {
 });
 ```
 
-`markerPattern` must contain exactly one capture group: the marker id. Any
-regex flags are fine — the library always takes a fresh copy internally, so
-reusing the same `RegExp` object elsewhere (including with `.test()`) is
-safe.
+`markerPattern` must contain exactly one capture group (the marker id) and
+must match at least one character. The kit does not count the groups: with no
+group a marker is still recognized but carries no id, so its sentence is
+classified `ungrounded`; with more than one, the first group is the id.
+
+The kit never uses your `RegExp` directly. Every call scans with a private
+copy that is always global and never sticky, so `g`, `y`, `gy` and no flags
+find the same markers, other flags (`i`, `u`, ...) are kept, and your object's
+`lastIndex` and flags are never touched. Reusing the same `RegExp` elsewhere
+(including with `.test()`) is safe.
+
+A marker match of zero characters (for example `/()/g`, or a lookahead such as
+`/(?=(a))/g`) throws `GroundingConfigError` as soon as one is found, instead
+of looping. A pattern that can match nothing but never does on your text is
+not an error.
+
+The default placeholder pattern allows up to 200 characters of note before
+the closing bracket (`[more research needed: ...]`). A longer note is not
+recognized as a placeholder, so that sentence is classified by its citations
+instead. If you need longer notes, pass your own `placeholderPattern`.
 
 **Note on bracket protection:** the fail-closed clause splitter treats any
 matched `[ ... ]` span as unsplittable (so a `;` inside a marker or
@@ -274,6 +329,21 @@ convention doesn't use brackets at all, the second mechanism still covers it.
 - `stripCitationMarkers(text, markerPattern?) => string` — remove markers for
   display/export, cleaning up any stray double-space or space-before-punctuation
   left behind.
+
+All three throw a `TypeError` for a non-string first argument or a
+`markerPattern` that is not a `RegExp`, and `GroundingConfigError` for a
+zero-length marker match.
+
+### Errors
+
+`GroundingConfigError` (exported) extends `TypeError` and has
+`name === "GroundingConfigError"`. It means the calling code or its
+configuration is wrong (a zero-length marker match, or a `supports` that
+returned a non-boolean), never that the text has a problem. Plain `TypeError`
+covers wrong argument types: a non-string text, a `config`, `abbreviations`
+or `evidenceMap` that is not a plain object, abbreviation lists that are not
+dense arrays of strings, a pattern that is not a `RegExp`, and a `supports`
+that is not a function.
 
 ## Limits (read this before shipping on the default config)
 
@@ -300,6 +370,12 @@ convention doesn't use brackets at all, the second mechanism still covers it.
   spurious splits. When in doubt it fails toward *more* (smaller) units,
   which is the safe direction for a grounding checker but can over-split
   unusual prose.
+- **A clean result can still hide unresolved work.** `isClean` ignores
+  placeholders and is `true` when nothing was checkable. It says the structure
+  held together, not that the text is complete or ready to publish.
+- **Only what it scans is protected.** The kit cannot see a citation that is
+  not written as a marker your `markerPattern` matches, and it does not decide
+  whether the evidence text itself is true.
 - **Evidence granularity is on you.** `evidenceMap` values can be a whole
   document or a single sentence-length span; the tighter the span, the more
   meaningful both the default overlap check and any injected `supports()`
@@ -307,23 +383,28 @@ convention doesn't use brackets at all, the second mechanism still covers it.
 
 ## Relationship to sibling kits
 
-[`provenance-kit`](https://github.com/lkopietz3-byte/provenance-kit) tracks
-where a piece of content or data came from; `grounding-kit` checks whether
-individual sentences in AI-generated text are backed by a citation into an
-`evidenceMap` you already built. The two don't share code — a provenance
-record is one reasonable source for the `evidenceMap` you pass in here.
+[`provenance-kit`](https://github.com/lkopietz3-byte/provenance-kit) labels
+claims as verified, modeled or editorial and checks that the public wording
+does not claim more certainty than the label allows. It never looks at
+evidence, and `grounding-kit` does not read its labels, so the two share no
+code and no data. A pipeline could run `grounding-kit` first (is this sentence
+backed by a citation into the evidence map) and `provenance-kit` second (does
+its wording match its tier).
 [`corroboration-kit`](https://github.com/lkopietz3-byte/corroboration-kit)
-grades whether independent evidence backs a claim once you have it; use
-`grounding-kit` first to find which sentences claim support, then
-`corroboration-kit` to grade the quality of that support.
+applies fixed rules to signals you have already collected and labeled, and
+returns a verdict bounded by the coverage you report. It trusts your labels
+and is not independent verification. Use `grounding-kit` to find which
+sentences claim support, then `corroboration-kit` if you want its rules
+applied to the signals you gathered for a claim.
 
 ## Development
 
 ```bash
-npm install
+npm ci
 npm run test        # vitest
 npm run typecheck    # tsc --noEmit, strict
 npm run build         # emit dist/ (ESM + .d.ts)
+npm run verify        # lint, typecheck, test, build, installed-package probes
 ```
 
 ## License
