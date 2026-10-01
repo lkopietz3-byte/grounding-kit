@@ -22,3 +22,13 @@ Deterministic, zero-dependency sentence-level citation-grounding checker for AI-
 - Do not run `npm publish` or push tags without explicit permission. Treat any claim that a version is published as Reported until the registry confirms it.
 - Runtime `dependencies` stay empty; add dev tooling only.
 - Keep unrelated uncommitted work intact; never stage or reset the whole tree.
+
+## Review preparation
+
+See [docs/REVIEW_READINESS.md](docs/REVIEW_READINESS.md) for milestone review cadence, declared verification gates and the next launch-preparation task.
+
+## Code Review Rules
+
+- Preserve classification precedence: invalid citation outranks placeholder, then grounded and ungrounded. Missing, inherited or non-string evidence entries must classify as invalid rather than supporting a clean result.
+- Keep defaultSupports described as substring/word-overlap matching, not semantic entailment. A custom supports hook must return a synchronous boolean; do not silently accept async or malformed hook results.
+- Preserve documented sentence-splitting character handling and exceptions. isClean is structural: placeholders and a lack of checkable sentences can still yield true, so consumer publishing claims must account for counts and sentence results.
