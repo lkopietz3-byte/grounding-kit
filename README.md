@@ -1,5 +1,7 @@
 # grounding-kit
 
+**[Try it in your browser →](https://lkopietz3-byte.github.io/honesty-kits/#grounding-kit)** · Part of [honesty kits](https://github.com/lkopietz3-byte/honesty-kits), a family of small checks for the claims an AI product makes.
+
 Deterministic, zero-runtime-dependency citation-grounding checker for
 AI-generated text. Splits generated text into sentences and classifies each
 one as `grounded`, `placeholder`, `ungrounded`, or `invalid` against a map of
