@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-07
+
+No change to the library's behavior or API.
+
+### Changed
+
+- The README links to the [in-browser playground](https://lkopietz3-byte.github.io/honesty-kits/#grounding-kit) and the honesty kits family, and the npm homepage now points to the playground.
+- Added the `honesty-kits` npm keyword so the family shows up together in search.
+
+### Security
+
+- Development lockfile: `source-map-js` 1.2.2 (GHSA-68fv-2mgg-jv7q). Development tooling only; the published package has no runtime dependencies.
+
 ## [0.2.0] - 2026-09-29
 
 Minor release: some inputs that used to be accepted now throw, and a few
