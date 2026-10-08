@@ -1,6 +1,6 @@
 {
   "name": "grounding-kit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Deterministic, zero-dependency sentence-level citation-grounding checker for AI-generated text. Splits text into sentences and classifies each as grounded, placeholder, ungrounded, or invalid (forged citation) — no LLM judge required.",
   "keywords": [
     "citation",
@@ -10,7 +10,8 @@
     "llm",
     "fact-checking",
     "ai-safety",
-    "sentence-splitter"
+    "sentence-splitter",
+    "honesty-kits"
   ],
   "author": "Lucas Kopietz",
   "license": "MIT",
@@ -18,7 +19,7 @@
     "type": "git",
     "url": "git+https://github.com/lkopietz3-byte/grounding-kit.git"
   },
-  "homepage": "https://github.com/lkopietz3-byte/grounding-kit#readme",
+  "homepage": "https://lkopietz3-byte.github.io/honesty-kits/#grounding-kit",
   "bugs": {
     "url": "https://github.com/lkopietz3-byte/grounding-kit/issues"
   },
