@@ -42,7 +42,13 @@ describe("evidence values", () => {
     };
     for (const value of [42, null, undefined, {}, ["text"], true]) {
       const result = classifySentence("Claim [[cite:e1]].", { e1: value as never }, { supports });
-      expect(result).toEqual({ sentence: "Claim [[cite:e1]].", status: "invalid", citedIds: ["e1"], validIds: [] });
+      expect(result).toEqual({
+        sentence: "Claim [[cite:e1]].",
+        status: "invalid",
+        citedIds: ["e1"],
+        validIds: [],
+        reasons: { e1: "invalid-evidence" },
+      });
     }
     expect(calls).toBe(0);
   });
@@ -85,7 +91,8 @@ describe("trailing-word scan boundaries", () => {
   it("does not treat a number before the period as an abbreviation, even with an empty entry configured", () => {
     // A fragment that is only "5." has no word. An empty configured entry
     // must not turn it into an abbreviation that swallows the next sentence.
-    expect(splitSentences("Wait. 5. Then go.", fuse(""))).toEqual(["Wait.", "5.", "Then go."]);
+    // "5." is a list label, so it joins the step it labels; "Wait." still ends.
+    expect(splitSentences("Wait. 5. Then go.", fuse(""))).toEqual(["Wait.", "5. Then go."]);
     expect(splitSentences("Wait. .. Then go.", fuse(""))).toEqual(["Wait.", "..", "Then go."]);
   });
 });
@@ -93,7 +100,10 @@ describe("trailing-word scan boundaries", () => {
 describe("defaultSupports normalization", () => {
   it("trims the normalized text before comparing", () => {
     // "up to 9!" becomes "up to 9 " with a trailing space until trimmed.
-    expect(defaultSupports("up to 9!", "up to 9items")).toBe(true);
-    expect(defaultSupports("!up to 9", "xup to 9")).toBe(true);
+    expect(defaultSupports("up to 9!", "up to 9 items")).toBe(true);
+    expect(defaultSupports("!up to 9", "x up to 9")).toBe(true);
+    // Containment is whole-word (hunt 2026-10-10): "9items" is a different
+    // word from "9", not a match.
+    expect(defaultSupports("up to 9!", "up to 9items")).toBe(false);
   });
 });

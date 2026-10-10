@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitSentences, type SplitterConfig } from "../src/index.js";
+import { DEFAULT_PLACEHOLDER_PATTERN, splitSentences, type SplitterConfig } from "../src/index.js";
 import { splitSentences as legacySplitSentences } from "./legacy/legacySplitter.js";
 import { mulberry32, pick } from "./helpers/prng.js";
 
@@ -92,6 +92,24 @@ function randomText(rand: () => number): string {
   return out;
 }
 
+// Shapes whose split intentionally changed on 2026-10-10 (see CHANGELOG):
+// line breaks (hard-wrap joining), a single letter or abbreviation before a
+// period, a lone list numeral, a closer after a terminator, and any
+// placeholder (now peeled like a marker).
+const CHANGED_SHAPES = [
+  /\n/u,
+  /(?:^|[^\p{L}.])\p{L}\.(?!\p{L})/u,
+  /(?:^|[^\p{L}.])(?:dr|mr|corp|e\.g|etc|no|u\.s|p\.m|vol)\./iu,
+  /(?:^|\s)\d{1,3}\.(?=\s|$)/u,
+  /[.!?。．！？]\s*\]/u,
+];
+
+function touchesChangedShape(text: string, config: SplitterConfig): boolean {
+  if (CHANGED_SHAPES.some((re) => re.test(text))) return true;
+  const placeholder = config.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
+  return new RegExp(placeholder.source, placeholder.flags.replace(/[gy]/g, "")).test(text);
+}
+
 describe("splitSentences is unchanged from the 0.1.1 splitter", () => {
   for (const [name, config] of configs) {
     it(`matches on every fixture (${name})`, () => {
@@ -102,14 +120,23 @@ describe("splitSentences is unchanged from the 0.1.1 splitter", () => {
       }
     });
 
-    it(`matches on 4,000 seeded random documents (${name})`, () => {
+    // Hunt 2026-10-10: the 0.1.1 output is a confirmed wrong verdict on some
+    // shapes this corpus generates (an abbreviation or single letter before a
+    // marker, a list numeral, a closer after a terminator, a placeholder after
+    // a period, hard-wrapped lines). The oracle still has to match exactly on
+    // every document that has none of those shapes.
+    it(`matches on 4,000 seeded random documents without a 2026-10-10 changed shape (${name})`, () => {
       const rand = mulberry32(20260928 + name.length);
+      let compared = 0;
       for (let i = 0; i < 4000; i++) {
         const text = randomText(rand);
+        if (touchesChangedShape(text, config)) continue;
+        compared++;
         expect(splitSentences(text, config), JSON.stringify(text)).toEqual(
           legacySplitSentences(text, config),
         );
       }
+      expect(compared).toBeGreaterThan(150);
     });
   }
 

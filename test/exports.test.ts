@@ -14,11 +14,15 @@ describe("DEFAULT_ABBREVIATIONS", () => {
   it("documents its exact contents", () => {
     expect(DEFAULT_ABBREVIATIONS.alwaysFuse).toEqual([
       "mr", "mrs", "ms", "dr", "prof", "hon", "st", "v", "vs",
+      "gov", "sen", "mt", "lt", "sgt", "capt", "rev", "messrs",
+      "eg", "ie", "cf", "viz",
     ]);
     expect(DEFAULT_ABBREVIATIONS.contextFuse).toEqual([
-      "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
-      "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
-      "am", "pm", "us",
+      "no", "inc", "co", "corp", "ltd", "llc", "plc", "dept", "vol", "ed",
+      "al", "etc", "approx", "est", "ca", "fig", "p", "pp", "jr", "sr",
+      "phd", "md",
+      "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+      "am", "pm", "us", "uk", "eu",
     ]);
   });
 
@@ -81,8 +85,14 @@ describe("defaultSupports", () => {
   it("passes on normalized substring containment in either direction", () => {
     expect(defaultSupports("battery life", "the battery life reached 14 hours")).toBe(true);
     expect(
-      defaultSupports("the battery life reached 14 hours in testing", "battery life"),
+      defaultSupports("the battery life reached 14 hours in testing", "battery life reached 14 hours"),
     ).toBe(true);
+    // A short evidence string no longer supports a longer claim just by
+    // appearing in it (hunt 2026-10-10): it must be at least 12 characters and
+    // 60% of the claim.
+    expect(
+      defaultSupports("the battery life reached 14 hours in testing", "battery life"),
+    ).toBe(false);
   });
 
   it("word-overlap ratio: fails just below the 0.6 threshold (2/5 = 0.4)", () => {
