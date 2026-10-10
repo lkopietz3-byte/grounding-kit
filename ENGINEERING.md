@@ -17,10 +17,12 @@
    "Clause-level splitting"), a leading citation marker with nothing before
    it anywhere in the whole document (it can't ground anything, so it's
    dropped), a unit made only of whitespace, default-ignorable and control
-   characters (it shows nothing, so it is not a claim), and, with
-   `markdown: true` (the default), markdown scaffolding, which
-   `classifyDocument` reports in `nonClaims` instead (README "Markdown and
-   layout"). Covered by a seeded-PRNG property test. Bracket matching for
+   characters (it shows nothing, so it is not a claim), and scaffolding
+   lines (a rule, a table separator row, a bare fence line, a lone list
+   numeral; with the opt-in `markdown: true`, also headings, labels, lead-ins,
+   table headers and fenced code), which `classifyDocument` reports in
+   `nonClaims` instead (README "Markdown and layout"). Covered by a
+   seeded-PRNG property test. Bracket matching for
    clause splitting fails closed: an unbalanced `[` never suppresses a later
    real split. A default-ignorable character right after a terminator, or in
    front of a marker, cannot hide a boundary.
@@ -34,10 +36,10 @@
    plus a scaling check. A caller-supplied regex that backtracks badly is the
    caller's configuration and is not covered. Classification is not linear in
    the worst case: `supports` runs once per distinct (id, text) pair per sentence, so
-   one sentence costs about (distinct ids) x (sentence length) with the default
-   `supports` when its citations sit together; spread out, each is judged
-   against its own span. One (id, text) pair repeated many times costs one
-   call.
+   a custom `supports` costs up to (distinct ids) x (its cost on the
+   sentence). The default `supports` normalizes each judged text once per
+   sentence and each evidence value once per call, so many ids on one long
+   sentence cost about the sentence length plus the evidence lengths.
 6. Internal code never mutates a caller-supplied `RegExp` (or the
    `lastIndex` of `DEFAULT_MARKER_PATTERN`/`DEFAULT_PLACEHOLDER_PATTERN`):
    it scans with private copies (global and non-sticky to find matches,
@@ -51,6 +53,11 @@
    evidence value are snapshotted per call, so a getter or Proxy cannot
    answer differently for a later sentence. `config`, `abbreviations` and
    `evidenceMap` must be plain or null-prototype objects.
+10. Release gate: under default options, no laundering document that 0.2.1
+   flagged may come back clean, and no honest document that 0.2.1 passed may
+   come back flagged, across the review corpus, the Codex cases and the
+   verdict table (`test/gate.test.ts`). A leniency that cannot meet it goes
+   behind an opt-in option with its measured trade-off in the README.
 
 ## Setup and verification
 

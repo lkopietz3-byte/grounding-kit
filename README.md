@@ -158,31 +158,37 @@ actually grounds. Hardened against:
 - **Clause-level splitting** on `;`, the em dash (`—`), and, when the clause
   before it already carries a citation, a colon or a dash separator (`–`,
   `―`, `--`, or a hyphen with a space on each side). An uncited clause can't
-  hide behind a citation elsewhere in the same sentence. Commas are
-  deliberately *not* split: one citation legitimately covers a comma-joined
-  sentence. A `;` or `:` inside matched brackets or parentheses, the `;` of an
-  HTML entity (`&amp;`), a URL's `://`, a time (`9:30`) and a numeric range
-  (`2020–2025`) are never clause breaks.
-- **Fail-closed bracket matching.** An unbalanced `[` or `(` never suppresses
-  a later clause split. Erring toward more (smaller) units is always safe: it
+  hide behind a citation elsewhere in the same sentence, including inside
+  parentheses (`claim (waterproof; doctor approved) [[cite:e1]]` splits at
+  the `;`). Commas are deliberately *not* split: one citation legitimately
+  covers a comma-joined sentence. A separator inside matched square brackets
+  (such as a marker or placeholder), the `;` of an HTML entity (`&amp;`, read
+  as the `&` it stands for), a URL's `://`, a time (`9:30`) and a numeric
+  range (`2020–2025`) are never clause breaks.
+- **Fail-closed bracket matching.** An unbalanced `[` never suppresses a
+  later clause split. Erring toward more (smaller) units is always safe: it
   can only ask for more grounding, never launder a claim past the checker.
 - **Invisible characters.** A zero-width space, bidi control, soft hyphen or
   other default-ignorable character placed right after a terminator, or in
   front of a marker, cannot hide a sentence boundary. A unit made only of
   whitespace and invisible characters is dropped instead of being returned as
   an "uncited claim".
-- **Line breaks.** `\n`, `\r\n`, a lone `\r`, U+2028 and U+2029 all end a
-  line.
+- **Lines.** A line ends at `\n` (`\r\n` works too). A lone `\r`, U+2028
+  and U+2029 end a line only with `markdown: true`; by default they do not,
+  as in 0.2.1, because splitting there can turn an honest document 0.2.1
+  passed into a failing one.
 
-With the default `markdown: true`, it also reads markdown and plain-text
-layout the way a reader does (see "Markdown and layout" below): scaffolding
-such as headings and table separators is not returned as a claim, a list
-numeral stays with the item it labels, and a hard-wrapped line that
-continues a sentence is joined to it.
+Lines that hold no claim are set aside instead of becoming phantom "uncited
+claims": a horizontal rule (`---`, `***`, `___`), a table separator row
+(`|---|:---:|`), a bare fence line (` ``` `) and a lone list numeral
+(`1.`, `2)`, `IV.`). A list numeral or label that starts a sentence
+(`1. The battery...`, `Step 3. Plug it in.`) stays with that sentence. The
+opt-in `markdown: true` mode sets more aside; see "Markdown and layout".
 
 Besides whitespace, `splitSentences` drops only: blank units, the clause
 separator itself at an accepted boundary, a marker with nothing before it
-anywhere in the document, and markdown scaffolding (see ENGINEERING.md).
+anywhere in the document, and the scaffolding lines above (see
+ENGINEERING.md).
 
 Work is linear in the length of `text` for the default patterns, including
 deeply nested brackets, long runs of markers, and unclosed `[TK` runs. A
@@ -203,48 +209,57 @@ splitSentences("1. The battery lasts 14 hours.\n2. The warranty is one year.");
 
 #### Abbreviations
 
+Every rule here that keeps two fragments together can also join an uncited
+sentence to a cited one, so the defaults only join where 0.2.1 did, or in a
+narrow context with clear evidence of one sentence.
+
 A period after a word in `abbreviations.alwaysFuse` never ends a sentence
-(titles such as `Dr.`, `Gov.`, `Mt.`, and `e.g.`, `i.e.`), except when a
-citation marker or placeholder follows it and the text after that does not
-continue in lower case. A period
-after a word in `abbreviations.contextFuse` ends the sentence when the next
-text starts with a capital letter, and not otherwise (`Corp. filed the
-report` is one sentence, `Corp. The filing...` is two). A few known
-`contextFuse` words also continue before a capital in a narrow context:
+(titles such as `Dr.`, `Mr.`), except when a citation marker or placeholder
+follows it and the text after that does not continue in lower case
+(`...by Dr. [[cite:e1]] Prices doubled.` is two sentences). A period after a
+word in `abbreviations.contextFuse` ends the sentence when the next text
+starts with a capital letter, and not otherwise (`Corp. filed the report` is
+one sentence, `Corp. The filing...` is two). A camel-case word (`iPhone`)
+counts as a capital. The words added to the defaults after 0.2.1 join only
+in a narrow context:
 
-| Word | Continues before a capital when the next word is | Example |
+| Words | Join only when the next text is | Example |
 | --- | --- | --- |
-| `a.m.`, `p.m.` | a time zone (`ET`, `PT`, `UTC`, `Eastern`, ...) | `9 a.m. Eastern` |
-| `U.S.`, `U.K.`, `E.U.` | not a common sentence opener (`The`, `It`, `We`, ...) | `the U.S. Department of Energy` |
-| `Inc.`, `Co.`, `Corp.`, `Ltd.`, `LLC`, `PLC` | a title (`CEO`, `Chief`, `President`, ...) | `Acme Inc. CEO Dana Lee` |
-| any word except `no` | (the abbreviation is the first word of its sentence) | `Sr. García reviewed it.` |
+| `Gov.`, `Sen.`, `Mt.`, `Lt.`, `Sgt.`, `Capt.`, `Messrs.` | a capitalized word that is not a sentence opener, with the title written capitalized | `Gov. Rivera signed it.` |
+| `Ph.D.`, `M.D.`, `U.K.`, `E.U.`, `plc`, `cf.`, `viz.` | lower case | `a Ph.D. in chemistry` |
+| `est.`, `ca.` | lower case, or a number of 3 or more digits | `ca. 1900` |
+| `Jan.` ... `Dec.`, `Sept.` | a day (1 to 31) followed by a comma, a year or the end | `Jan. 5, 2024` |
+| `a.m.`, `p.m.` (also the 0.2.1 rule) | a time-zone code (`ET`, `PT`, `UTC`, ...) | `9 a.m. ET` |
+| any word except `no` | anything not marker-led, when the abbreviation is the whole fragment | `Sr. García reviewed it.` |
 
-`am`, `pm` and `us` count as abbreviations only when written with an inner
-period (`a.m.`, `U.S.`), so `I am. Then...` and `Ask us. 24 hours later...`
-end where they should. A camel-case word (`iPhone`, `eBay`) counts as a
-capital.
+`am`, `pm`, `us`, `uk` and `eu` count as abbreviations only when written with
+inner periods (`a.m.`, `U.S.`, `U.K.`), so `I am. Then...`, `Ask us. 24 hours
+later...` and `...in the UK. Acme...` end where they should.
 
-A single letter before a period is read as a name initial (`Dana M.
-Whitfield`, `J. R. R. Tolkien`) when it is a capital that follows a
-capitalized name word or another initial and is followed by a capitalized
-word that is not a sentence opener, and as a reference when a lower-case
-letter is followed by a number (`p. 4`). Otherwise it ends the sentence
-(`plan B. Prices doubled.`, `vitamin D. studies...`).
+A single letter before a period joins the next fragment, as in 0.2.1 (a name
+initial: `Dana M. Whitfield`, `according to J. Smith`), unless there is
+evidence of a sentence end: a marker follows (`room B. [[cite:e1]] Prices
+doubled.`), the next text is lower case (`plan B. independent...`), the word
+before is a label noun (`plan B.`, `Section A.`, `vitamin D.`), or the next
+word is a sentence opener (`Plan B. The vendor agreed.`).
 
 The defaults are small and English-oriented:
 
 ```ts
 import { DEFAULT_ABBREVIATIONS } from "grounding-kit";
-// alwaysFuse: mr mrs ms dr prof hon st v vs gov sen mt lt sgt capt rev messrs eg ie cf viz
-// contextFuse: no inc co corp ltd llc plc dept vol ed al etc approx est ca fig p pp jr sr
-//              phd md jan feb mar apr jun jul aug sep sept oct nov dec am pm us uk eu
+// alwaysFuse: mr mrs ms dr prof hon st v vs
+// contextFuse: no inc co corp ltd llc dept vol ed al etc eg ie approx fig p pp jr sr am pm us
+//              plc est ca cf viz phd md uk eu gov sen mt lt sgt capt messrs
+//              jan feb mar apr jun jul aug sep sept oct nov dec
 ```
 
 Your own lists replace the defaults entirely (they don't merge), so you
-always know exactly what's active. Entries are compared without case and
-without dots, so `"Dr."`, `"dr"` and `"D.R."` are the same entry. An entry
-must be letters of a cased script (Latin, Greek, Cyrillic, ...); anything
-else (a digit, a space) could never match a word and throws a `TypeError`.
+always know exactly what's active. The narrow-context rules in the table
+above apply to those words whichever list they appear in. Entries are
+compared without case and without dots, so `"Dr."`, `"dr"` and `"D.R."` are
+the same entry. An entry must be letters of a cased script (Latin, Greek,
+Cyrillic, ...); anything else (a digit, a space) could never match a word and
+throws a `TypeError`.
 
 ```ts
 // A Spanish-language override: here "Sr." and "Sra." are titles (señor,
@@ -261,31 +276,41 @@ splitSentences(text, {
 
 #### Markdown and layout
 
-With `markdown: true` (the default):
+By default every line is checked as text, except the claim-free scaffolding
+lines listed above. Headings, bold labels and table header rows are claims:
+a document with `## Battery` as a heading fails, as it did in 0.2.1, because
+a heading can just as well say `## Battery lasts 40 hours`.
 
-- These lines are **not claims** and are not returned: a heading (`#` to
-  `######`) that doesn't end like a statement, a horizontal rule (`---`,
-  `***`, `___`), a table separator row (`|---|:---:|`) and the header row
-  above it, a short emphasized label on its own line (`**Summary**`,
-  `**Battery:**`, `*Note*`, up to six words), a lead-in line that ends in a
-  colon right before a list, table or code block (`Here is what the policy
-  says:`, up to ten words), and a fenced code block (an unclosed fence hides
-  nothing after it).
-- Any of those is **still a claim** when it carries a citation marker or a
-  placeholder, or ends like a statement (`.`, `!`, `。`, ...; a question mark
-  doesn't count): `## Prices doubled in 2025.` is checked.
-- A list numeral or label (`1.`, `2)`, `IV.`, `B.`, `Step 3.`) stays with the
-  item it labels instead of becoming a phantom uncited sentence.
-- A table data row is a claim, one unit per row.
-- A line that continues the sentence of the line before it is joined to it:
-  when it starts in lower case, or the line before ends with a comma or a
-  word such as `the`, `of`, `and` or `is`. A capitalized line after a line
-  with no end punctuation is not joined (`Prices doubled last spring` +
-  newline + `The battery lasts 14 hours [[cite:e1]].` stays two units).
+`markdown: true` is an **opt-in, more lenient** mode for honest markdown
+reports. It also sets aside, and lists in `nonClaims`:
 
-`classifyDocument` lists what it set aside in `nonClaims`, so you can review
-it. Pass `markdown: false` to treat every line as plain text, as in 0.2.1:
-nothing is set aside and wrapped lines are not joined.
+- a heading (`#` to `######`);
+- a line that is one emphasized phrase of up to six words (`**Summary**`,
+  `**Battery:**`, `*Note*`); a line like `**Battery:** lasts **40 hours**`
+  is not one phrase and stays a claim;
+- a lead-in line of up to ten words that ends in a colon right before a
+  list, table or code block (`Here is what the policy says:`);
+- a table's header row (its first row, right above the separator row);
+- a fenced code block, from an opening fence to a closing fence of the same
+  character and at least the same length (an unclosed fence hides nothing,
+  and inline code such as ` ```npm i``` ` at the start of a line is not a
+  fence).
+
+Any of those is **still a claim** when it carries a citation marker or a
+placeholder, or holds a statement: any sentence terminator inside it other
+than one final question mark (`## The X3 is waterproof. Our verdict` and
+`| Prices doubled last spring. |` are checked). It also joins a hard-wrapped
+line to the line before it when it starts in lower case, or when the line
+before ends with a comma or a word such as `the`, `of`, `and` or `is`.
+
+The trade-off, measured on a 55-document laundering corpus and 25 honest
+documents from the 2026-10-10 review: the default catches 52 of 55
+laundering documents and passes 14 of 25 honest ones; `markdown: true`
+passes 21 of 25 honest ones but catches only 34 of 55, because a claim
+written as a heading, a short bold line, a table header, a lead-in or a
+wrapped line (`## Acme X3 battery lasts 40 hours`, `**Price: $99**`) is not
+checked. Use it only when your generator's headings and labels carry no
+claims, and review `nonClaims`. `isClean` does not look at `nonClaims`.
 
 ### `classifySentence(sentence, evidenceMap, config?) => SentenceClassification`
 
@@ -300,7 +325,7 @@ interface SentenceClassification {
 
 type CitationReason =
   | "supported"         // accepted by supports()
-  | "no-content-words"  // default matcher only: nothing to compare ("Yes [[cite:e1]].")
+  | "no-content-words"  // default matcher only: nothing to compare ("Yes [[cite:e1]]."); still invalid
   | "not-supported"     // supports() said no: a lead for review
   | "invalid-evidence"  // the id maps to a non-string value
   | "unknown-id";       // the id is not in evidenceMap: a citation to nothing
@@ -340,26 +365,24 @@ classifySentence(
 
 #### Sentences with several citations
 
-Each citation is judged against the text it is attached to:
+Every citation is judged against the whole sentence, as in 0.2.1. In a
+sentence with several groups of citations (a group is one marker, or markers
+side by side with only spaces or punctuation between them), a citation is
+also accepted when it fully backs its own **span**: the text since the
+previous group (or the start of the sentence), plus, for the last group, any
+text after it. "Fully" means the span has at least three content words and
+every one of them (with the default matcher) appears in that id's evidence;
+with a custom `supports`, it means `supports(span, evidence)` is true.
 
-- With **one group** of citations (one marker, or several markers side by
-  side with nothing but spaces or punctuation between them), every id in the
-  group is judged against the whole sentence, as in 0.2.1.
-- With **several groups**, each group covers its **span**: the text since
-  the previous group (or the start of the sentence), and for the last group
-  also any text after it. `X [[cite:e1]] and Y [[cite:e2]].` judges `e1`
-  against `X` and `e2` against `and Y.`.
-  - A span with three or more content words is judged on its own, so a
-    citation can't vouch for a claim it sits next to but doesn't support.
-  - A span with one or two content words (`According to the lab`, `and costs
-    $1,299`) is accepted if either the whole sentence or the span passes.
-  - A span with no content words (`and`) uses the whole sentence.
-- The sentence is grounded only if every citation is accepted for its own
-  text.
-- With the default matcher, ids in one group may share the work: an id that
-  doesn't pass on its own is accepted when the group's evidence together
-  covers 60% of the text's content words and this id's evidence covers at
-  least two of them. An unrelated id in the group still fails.
+So the span rule can only add passes, never take one away from 0.2.1:
+
+- `<evidence A, near verbatim> [[cite:a]], and <evidence B, near verbatim>
+  [[cite:b]].` now passes, where 0.2.1 failed both ids.
+- `<claim A> [[cite:a]] and <claim B plus an uncited clause> [[cite:b]].`
+  fails: the second span has words its evidence lacks, and the whole
+  sentence is not supported either.
+- A paraphrased span is judged on the whole sentence, as in 0.2.1, so two
+  paraphrased claims with their own citations can still fail together.
 
 A "content word" is what the default matcher compares: a word longer than
 three characters, or a two-character piece of an unspaced script (see
@@ -374,7 +397,7 @@ interface DocumentClassification {
   sentences: SentenceClassification[];
   counts: Record<"grounded" | "placeholder" | "ungrounded" | "invalid", number>;
   citedEvidenceIds: string[]; // distinct ids validly cited anywhere in the document
-  nonClaims: string[];        // markdown scaffolding that was set aside, unjudged
+  nonClaims: string[];        // scaffolding lines that were set aside, unjudged
   isClean: boolean;           // true iff ungrounded === 0 && invalid === 0
 }
 ```
@@ -387,32 +410,30 @@ not silently accepted or silently rejected.
 `isClean` is a structural result, not a verdict. It is `true` for a document
 whose only findings are placeholders (unresolved gaps), and also for a
 document with no checkable sentences at all (empty text, whitespace, a lone
-marker, or only markdown scaffolding). Check `counts.placeholder`,
-`sentences.length` and `nonClaims` before you treat it as "done".
+marker, or only scaffolding). It does not look at `nonClaims`. Check
+`counts.placeholder`, `sentences.length` and `nonClaims` before you treat it
+as "done".
 
 **Cost.** `supports` is called at most once per distinct (id, text) pair in a
-sentence, so repeating an id next to the same text costs one call. The
-default `supports` reads the text it is given, so a sentence costs about
-the sum, over its citations, of the length of the text each is judged
-against:
-
-- citations spread through a sentence: each is judged against its own span,
-  so the total is about the sentence length;
-- citations side by side (one group): each id is judged against the whole
-  sentence, so the cost is (distinct ids) x (sentence length).
+sentence, so repeating an id next to the same text costs one call. With the
+default `supports`, each judged text is normalized once per sentence and
+each evidence value once per call, so a sentence costs about its own length
+plus, per distinct cited id, the length of that id's evidence (and of its
+span, when it has one). A custom `supports` is called with the whole
+sentence for every distinct id, so its cost is up to (distinct ids) x (its
+own cost on the sentence).
 
 Measured with the default `supports` on a developer laptop under heavy load
 (numbers vary with the machine):
 
 - a 154,000-character sentence with 1,000 different ids spread through it:
-  about 0.1 s (0.2.1, which judged every id against the whole sentence, took
-  7 to 20 s on the same input);
-- a 340,000-character sentence that repeats one id 20,000 times, each after a
-  word: about 0.1 s;
-- about 1 MB of short cited sentences (15,600 sentences): about 0.2 to 0.3 s;
-- the worst case, citations side by side at the end of one long sentence:
-  200 different ids after 157,000 characters took about 5 s, and 1,000 ids
-  after 168,000 characters about 15 s (0.2.1: about 19 s).
+  about 0.2 s (0.2.1: 7 to 20 s);
+- a 168,000-character sentence ending in 1,000 different ids side by side:
+  about 0.25 s (0.2.1: about 19 s);
+- 16,000 different ids, each after one word, in one 437,000-character
+  sentence: about 0.1 s (0.2.1: about 180 s);
+- a 340,000-character sentence that repeats one id 20,000 times: about 0.2 s;
+- about 1 MB of short cited sentences (15,600 sentences): about 0.3 s.
 
 Text made of many short cited sentences grows about linearly with its
 length (a scaling test covers this). A slow `supports` (an embedding or model
@@ -435,8 +456,8 @@ type SupportsFn = (sentenceText: string, evidenceText: string) => boolean;
 
 `classifySentence`/`classifyDocument` accept `config.supports` to decide
 whether a piece of evidence actually backs a claim. `sentenceText` is the
-marker-free text the citation is judged against: the whole sentence, or its
-span (see "Sentences with several citations").
+marker-free text the citation is judged against: the whole sentence, or
+first its span (see "Sentences with several citations").
 
 The **default** (`defaultSupports`) is intentionally naive lexical matching,
 not semantic entailment. Both sides are normalized (Unicode NFC, lower case,
@@ -445,21 +466,25 @@ letters keep their combining marks, so Hindi vowel signs and Arabic
 diacritics stay part of the word). Then it returns `true` when:
 
 - the claim appears in the evidence as whole words, or
-- the evidence appears in the claim as whole words and is at least 12
-  characters and 60% of the claim's length (a short evidence string such as
-  `"Acme"` no longer supports any sentence that mentions it), or
+- the evidence appears in the claim as whole words, is at least 12
+  characters with three content words, and covers 60% of the claim's content
+  words (when classifying, other evidence cited side by side that the claim
+  also contains counts toward that 60%). A short evidence string such as
+  `"Acme"` or `"cat"` no longer supports a sentence that mentions it, and
+  `<evidence> and <made-up claim>` no longer passes on containment alone, or
 - at least 60% of the claim's content words also appear in the evidence.
-  Content words are words longer than three characters; when a claim has
-  none, its numbers are compared instead (`Tax is 5%`). Text in a script
+  Content words are words longer than three characters. Text in a script
   written without spaces (Chinese, Japanese, Thai, Lao, Khmer, Burmese) is
-  compared by overlapping two-character pieces instead of words.
+  compared by overlapping two-character pieces, and every piece, plus any
+  number written inside that text, must appear in the evidence, so an
+  inserted negation (`不`) or a changed number fails. Close paraphrases in
+  those scripts usually fail too, as they did in 0.2.1.
 
-A claim with no content words at all (`"Yes."`) returns `false` from
-`defaultSupports`; when classifying with the default, such a citation is
-accepted unchecked with the reason `no-content-words`, because there is
-nothing to compare. It's good enough to catch an obviously wrong or missing
-citation and to run in CI with zero cost or latency; see **Limits** below for
-what it can't do.
+A claim with no content words at all (`Yes.`, `It's 99%.`) returns `false`.
+When classifying with the default, such a citation is `invalid` with the
+reason `no-content-words`, so you can tell it apart from a mismatch. It's
+good enough to catch an obviously wrong or missing citation and to run in CI
+with zero cost or latency; see **Limits** below for what it can't do.
 
 ```ts
 import { classifyDocument, type SupportsFn } from "grounding-kit";
@@ -529,8 +554,8 @@ its citations instead. If you need longer notes, pass your own
 `placeholderPattern`.
 
 **Note on bracket protection:** the fail-closed clause splitter treats any
-matched `[ ... ]` or `( ... )` span as unsplittable (so a `;` inside a marker,
-placeholder or aside is never mistaken for a clause boundary), and
+matched `[ ... ]` span as unsplittable (so a `;` inside a marker or
+placeholder is never mistaken for a clause boundary), and
 additionally shields whatever `markerPattern`/`placeholderPattern` match
 directly even if they use a different delimiter (`{{ref:1}}`, `<cite
 id="1">`, etc.). If your convention doesn't use brackets at all, the second
@@ -577,11 +602,14 @@ function.
   with their evidence, and it will fail some genuinely correct paraphrases.
   It has no stemming (`weighs` and `weight` differ), no synonyms (`price` and
   `costs` differ), and no notion of negation, numeric precision, or logical
-  entailment: `"revenue grew 40%"` and `"revenue grew 4%"` share every
-  content word and read as supporting each other. Its `not-supported` result
-  is a lead for review, not proof of a forged citation. For anything
-  higher-stakes than a fast first pass or a CI smoke test, replace it with an
-  embedding-similarity or NLI-based `supports` function tuned on your domain.
+  entailment in spaced scripts: `"revenue grew 40%"` and `"revenue grew 4%"`
+  share every content word and read as supporting each other, and so do `are`
+  and `are not` (short words are not compared). A claim of only short words
+  and numbers (`It's 129 g`) cannot be checked and is `invalid`. Its
+  `not-supported` result is a lead for review, not proof of a forged
+  citation. For anything higher-stakes than a fast first pass or a CI smoke
+  test, replace it with an embedding-similarity or NLI-based `supports`
+  function tuned on your domain.
 - **This is a mechanical parser, not a truth checker.** It verifies that a
   citation marker points at evidence text that plausibly relates to the
   sentence, the same "does the shape hold together" contract a linter
@@ -590,28 +618,28 @@ function.
   subtly distorted what the evidence actually says (e.g. dropping a
   qualifier, reversing a comparison). Treat a `grounded` result as "passed
   the structural check," not "verified true."
-- **Every sentence is treated as a claim.** A question, an instruction or
-  conversational filler (`Great question!`, `Hope this helps!`) counts as an
-  uncited sentence. Strip those before checking, or review them.
+- **Every sentence is treated as a claim.** A heading, a bold label, a
+  question, an instruction or conversational filler (`Great question!`, `Hope
+  this helps!`) counts as an uncited sentence by default. Strip those before
+  checking, review them, or use `markdown: true` (see its trade-off above).
+- **A whole sentence can carry a 40% tail.** A citation judged against the
+  whole sentence passes at 60% word overlap, so an uncited clause joined by a
+  comma or `and` (`<supported claim> and doctors recommend it [[cite:e1]]`)
+  can pass, as in 0.2.1. A citation next to a claim it does not support can
+  also pass when it supports the whole sentence. Prefer one claim per
+  sentence.
 - **The sentence splitter is a heuristic, not a full NLP pipeline.** The
-  default abbreviation list is small and English-oriented. Known misses:
-  an initial after a lower-case word splits (`according to J. Smith`);
-  `no.` before a number is read as "number" (`The answer is no. 3 people
-  disagreed.` is one sentence); `U.S.` before a capitalized word that is not
-  a common sentence opener is read as continuing (`in the U.S. Prices
-  rose.` is one sentence, judged as a whole); a capitalized line after a
-  wrapped line with no end punctuation is not joined. When in doubt it fails
-  toward *more* (smaller) units, which is the safe direction for a grounding
-  checker but can over-split unusual prose.
-- **Markdown scaffolding is not checked.** A heading, short bold label,
-  table header or lead-in line that doesn't end like a statement and carries
-  no marker is set aside even if it makes a claim (`## Prices doubled in
-  2025`). They are listed in `nonClaims`; pass `markdown: false` if your
-  headings carry claims that must be cited.
-- **Unspaced scripts are compared by character pairs.** That catches
-  unrelated evidence and accepts close paraphrases, but a changed number
-  written in characters (`二十` vs `十四`) can still pass, as it can in
-  English.
+  default abbreviation list is small and English-oriented, and 0.2.1's joins
+  are kept: a single capital letter before a period joins the next
+  capitalized word (`We hired Agent K. Prices doubled.` is one sentence),
+  and `no.` before a number is read as "number" (`The answer is no. 3 people
+  disagreed.` is one sentence). Common abbreviations before a capital split
+  mid-sentence (`the U.S. Department of Energy`, `e.g. Apple`), which fails
+  safe. When in doubt it fails toward *more* (smaller) units.
+- **`markdown: true` does not check scaffolding.** A heading, short bold
+  line, table header, lead-in or wrapped line that holds no statement and
+  carries no marker is set aside even if it makes a claim (`## Prices doubled
+  in 2025`), and `isClean` ignores it. Review `nonClaims` when you use it.
 - **A clean result can still hide unresolved work.** `isClean` ignores
   placeholders and is `true` when nothing was checkable. It says the structure
   held together, not that the text is complete or ready to publish.
