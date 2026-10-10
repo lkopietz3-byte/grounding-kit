@@ -75,6 +75,15 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   `u`- or `v`-flag placeholder pattern now advances by a whole code point
   instead of looping inside a surrogate pair.
 
+- **Review of 2042351.** A CJK full stop followed by a closing bracket or
+  quote (`。」`, `。』`, `。）` ...) and then text with no space is a sentence
+  boundary again, and a Western terminator with a closing quote directly
+  before a capital (`."Prices`) is one too. A month abbreviation no longer
+  joins a number that is not a day (`Jan. 5,000`, `5.5`, `5%`, `5th`). With
+  `markdown: true`, a fenced block that carries a citation is no longer set
+  aside. One id cited in many separate groups is checked once per sentence
+  (8,000 occurrences: about 560 ms on 2042351, about 30 ms now).
+
 ### Added
 
 - `SentenceClassification.reasons`: per distinct id, `supported`,

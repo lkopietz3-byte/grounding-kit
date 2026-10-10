@@ -136,15 +136,22 @@ export interface SplitterConfig {
 // sentence; the CJK full stops below also end one with no space after them.
 const TERMINATORS = ".!?…‼⁇⁈⁉।॥؟۔。．！？";
 // Characters that can close a sentence after its terminator: quotes,
-// brackets, markdown emphasis, CJK closing brackets, footnote superscripts.
-const CLOSERS = "\"'”’»)\\]}*_」』）¹²³⁰⁴⁵⁶⁷⁸⁹†‡";
+// brackets (ASCII, full-width and CJK), markdown emphasis, footnote
+// superscripts.
+const CLOSERS = "\"'”’»)\\]}*_」』）〕】》〉＂＇］｝¹²³⁰⁴⁵⁶⁷⁸⁹†‡";
 const TERMINATOR_CLASS = new RegExp(`[${TERMINATORS}]`, "u");
 const CLOSER_CLASS = new RegExp(`[${CLOSERS}]`, "u");
-// Split after a terminator (plus up to three closers) followed by whitespace,
-// and after a CJK full stop followed directly by text. The closer run is
-// bounded so the lookbehind stays O(1) per position.
+// A sentence ends after a terminator (plus up to three closers):
+// - followed by whitespace;
+// - for a CJK full stop, followed directly by text, also after its closers
+//   ("。」次の文");
+// - for any other terminator, after at least one closer and directly before
+//   a capital letter ('."Prices doubled').
+// The closer run is bounded so each lookbehind stays O(1) per position.
 const SENTENCE_BOUNDARY = new RegExp(
-  `(?<=[${TERMINATORS}][${CLOSERS}]{0,3})\\s+|(?<=[。．！？])(?=[^\\s${CLOSERS}])`,
+  `(?<=[${TERMINATORS}][${CLOSERS}]{0,3})\\s+` +
+    `|(?<=[。．！？][${CLOSERS}]{0,3})(?=[^\\s${CLOSERS}])` +
+    `|(?<=[.!?…‼⁇⁈⁉।॥؟۔][${CLOSERS}]{1,3})(?=\\p{Lu})`,
   "u",
 );
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
@@ -523,8 +530,10 @@ function contextFuses(word: string, written: string, standalone: boolean, lead: 
   }
   if (MONTH_WORDS.has(word)) {
     // "Jan. 5, 2024" or "Jan. 5 2024": a day number from 1 to 31, then a
-    // comma, a year or the end. "Sept. 9 of 10 users" is a new sentence.
-    const day = /^(\d{1,2})(?:\s*[,)]|\s+\d{4}(?!\d)|\s*$)/.exec(t);
+    // comma that does not start a digit group, a year or the end. "Sept. 9
+    // of 10 users", "Jan. 5,000 devices", "Jan. 5.5", "Jan. 5%" and "Jan.
+    // 5th" all start a new sentence (an ordinal fails safe).
+    const day = /^(\d{1,2})(?:\s*,(?!\d)|\s*\)|\s+\d{4}(?![\d.,])|\s*$)/.exec(t);
     return day !== null && Number(day[1]) >= 1 && Number(day[1]) <= 31;
   }
   if (LOWER_ONLY_WORDS.has(word)) return startsLower(t);
@@ -868,8 +877,15 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
       const c = fences[j];
       if (c !== null && c.bare && c.char === f.char && c.length >= f.length) break;
     }
-    inFence.fill(1, i, j + 1);
-    fenceBlocks.set(i, lines.slice(i, j + 1).join("\n"));
+    // A block that carries a citation marker or placeholder is not set
+    // aside: its citations must still be judged (an unknown id inside it has
+    // to make the document unclean). Its lines are read as ordinary lines.
+    let cited = false;
+    for (let k = i + 1; k < j && !cited; k++) cited = carriesCitation(lines[k], resolved);
+    if (!cited) {
+      inFence.fill(1, i, j + 1);
+      fenceBlocks.set(i, lines.slice(i, j + 1).join("\n"));
+    }
     i = j;
   }
 

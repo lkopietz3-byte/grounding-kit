@@ -138,8 +138,11 @@ actually grounds. Hardened against:
   the unit." stays one sentence, via a configurable list (see
   "Abbreviations" below).
 - **Non-ASCII sentence terminators**: `。` `．` `！` `？` (which also end a
-  sentence with no space after them), and `…` `‼` `⁇` `⁈` `⁉` `।` `॥` `؟`
-  `۔` (which need a space after them, like `.`).
+  sentence with no space after them, including after closing brackets or
+  quotes such as `。」次の文`), and `…` `‼` `⁇` `⁈` `⁉` `।` `॥` `؟` `۔`
+  (which need a space after them, like `.`). Any terminator followed by a
+  closing quote or bracket also ends the sentence directly before a capital
+  letter, with no space (`..."Prices doubled.`).
 - **A marker glued to adjacent text with no whitespace**:
   `"...reviewed.[[cite:e1]]The next..."` is normalized before splitting so it
   can't fuse two sentences into one.
@@ -228,7 +231,7 @@ in a narrow context:
 | `Gov.`, `Sen.`, `Mt.`, `Lt.`, `Sgt.`, `Capt.`, `Messrs.` | a capitalized word that is not a sentence opener, with the title written capitalized | `Gov. Rivera signed it.` |
 | `Ph.D.`, `M.D.`, `U.K.`, `E.U.`, `plc`, `cf.`, `viz.` | lower case | `a Ph.D. in chemistry` |
 | `est.`, `ca.` | lower case, or a number of 3 or more digits | `ca. 1900` |
-| `Jan.` ... `Dec.`, `Sept.` | a day (1 to 31) followed by a comma, a year or the end | `Jan. 5, 2024` |
+| `Jan.` ... `Dec.`, `Sept.` | a day (1 to 31) followed by a comma (not a digit group such as `5,000`), a year or the end; `5.5`, `5%` and `5th` end the sentence | `Jan. 5, 2024` |
 | `a.m.`, `p.m.` (also the 0.2.1 rule) | a time-zone code (`ET`, `PT`, `UTC`, ...) | `9 a.m. ET` |
 | any word except `no` | anything not marker-led, when the abbreviation is the whole fragment | `Sr. García reviewed it.` |
 
@@ -293,8 +296,9 @@ reports. It also sets aside, and lists in `nonClaims`:
 - a table's header row (its first row, right above the separator row);
 - a fenced code block, from an opening fence to a closing fence of the same
   character and at least the same length (an unclosed fence hides nothing,
-  and inline code such as ` ```npm i``` ` at the start of a line is not a
-  fence).
+  inline code such as ` ```npm i``` ` at the start of a line is not a fence,
+  and a block that carries a citation marker or placeholder is read as
+  ordinary lines, so its citations are still judged).
 
 Any of those is **still a claim** when it carries a citation marker or a
 placeholder, or holds a statement: any sentence terminator inside it other

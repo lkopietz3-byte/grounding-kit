@@ -253,20 +253,39 @@ function coverage(claim: PreparedClaim, evidence: readonly PreparedEvidence[]): 
 // the claim contains cover 60% of its words together, so "<evidence> and
 // <fabricated claim>" does not pass, while "<evidence A> and <evidence B>
 // [[cite:a]][[cite:b]]" does.
+/**
+ * The part of the default verdict that depends only on the claim and one
+ * evidence text: whether it passes by itself (the claim appears in the
+ * evidence, or 60% word overlap), and whether the evidence is contained in the
+ * claim (which passes only with enough coverage, see `supportsPrepared`).
+ */
+interface WholeFacts {
+  pass: boolean;
+  contained: boolean;
+}
+
+function wholeFacts(claim: PreparedClaim, evidence: PreparedEvidence): WholeFacts {
+  if (claim.length === 0 || evidence.length === 0) return { pass: false, contained: false };
+  if (claim.length <= evidence.length && evidence.padded.includes(claim.padded)) {
+    return { pass: true, contained: false };
+  }
+  const contained = containedIn(claim, evidence);
+  if (claim.significant.size === 0) return { pass: false, contained };
+  for (const w of claim.required) if (!evidence.tokens.has(w)) return { pass: false, contained };
+  // Only the claim's significant words are looked up, so short evidence words never matter.
+  let overlap = 0;
+  for (const w of claim.significant) if (evidence.tokens.has(w)) overlap++;
+  return { pass: overlap / claim.significant.size >= OVERLAP_SHARE, contained };
+}
+
 function supportsPrepared(
   claim: PreparedClaim,
   evidence: PreparedEvidence,
   containedShare: () => number = () => coverage(claim, [evidence]),
+  facts: WholeFacts = wholeFacts(claim, evidence),
 ): boolean {
-  if (claim.length === 0 || evidence.length === 0) return false;
-  if (claim.length <= evidence.length && evidence.padded.includes(claim.padded)) return true;
-  if (containedIn(claim, evidence) && containedShare() >= OVERLAP_SHARE) return true;
-  if (claim.significant.size === 0) return false;
-  for (const w of claim.required) if (!evidence.tokens.has(w)) return false;
-  // Only the claim's significant words are looked up, so short evidence words never matter.
-  let overlap = 0;
-  for (const w of claim.significant) if (evidence.tokens.has(w)) overlap++;
-  return overlap / claim.significant.size >= OVERLAP_SHARE;
+  if (facts.pass) return true;
+  return facts.contained && containedShare() >= OVERLAP_SHARE;
 }
 
 /**
@@ -462,6 +481,11 @@ function classifyResolved(
   // cost about the sentence length plus the evidence lengths.
   let claim: PreparedClaim | undefined;
   const claimPrepared = (): PreparedClaim => (claim ??= prepareClaim(claimText));
+  // Whole-sentence facts and the single-id coverage do not depend on the
+  // group, so one id cited many times in separate groups is checked once.
+  // Built only for sentences with more than one group.
+  const factsById = groups.length > 1 ? new Map<string, WholeFacts>() : null;
+  const ownShareById = groups.length > 1 ? new Map<string, number>() : null;
   const evidenceFor = (id: string, text: string): PreparedEvidence => {
     let ev = preparedEvidence.get(id);
     if (ev === undefined) {
@@ -472,8 +496,9 @@ function classifyResolved(
   };
   // A custom `supports` is asked once per distinct (id, text) pair in the
   // sentence. Keyed by text first, so a long text is hashed once.
-  const answers = new Map<string, Map<string, boolean>>();
+  let answers: Map<string, Map<string, boolean>> | undefined;
   const askCustom = (id: string, text: string, evidence: string): boolean => {
+    answers ??= new Map();
     let byId = answers.get(text);
     if (byId === undefined) {
       byId = new Map();
@@ -497,6 +522,16 @@ function classifyResolved(
     let containedShare: number | undefined;
     let spanClaim: PreparedClaim | undefined;
     const groupContainedShare = (): number => {
+      if (containedShare === undefined && new Set(group.ids).size === 1) {
+        const only = group.ids[0];
+        let share = ownShareById?.get(only);
+        if (share === undefined) {
+          const ev = lookup(only);
+          share = ev.kind === "text" ? coverage(claimPrepared(), [evidenceFor(only, ev.text)]) : 0;
+          ownShareById?.set(only, share);
+        }
+        containedShare = share;
+      }
       if (containedShare === undefined) {
         const c = claimPrepared();
         const contained: PreparedEvidence[] = [];
@@ -523,7 +558,12 @@ function classifyResolved(
         if (group.span !== null && fullyCovers((spanClaim ??= prepareClaim(group.span)), prepared)) {
           return "supported";
         }
-        if (supportsPrepared(claimPrepared(), prepared, groupContainedShare)) return "supported";
+        let facts = factsById?.get(id);
+        if (facts === undefined) {
+          facts = wholeFacts(claimPrepared(), prepared);
+          factsById?.set(id, facts);
+        }
+        if (supportsPrepared(claimPrepared(), prepared, groupContainedShare, facts)) return "supported";
         // Text with nothing to compare cannot be checked. That is still a
         // failure, reported apart from a mismatch.
         return claimPrepared().significant.size === 0 ? "no-content-words" : "not-supported";
