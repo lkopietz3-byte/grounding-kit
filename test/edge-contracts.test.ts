@@ -101,7 +101,7 @@ describe("defaultSupports normalization", () => {
   it("trims the normalized text before comparing", () => {
     // "up to 9!" becomes "up to 9 " with a trailing space until trimmed.
     expect(defaultSupports("up to 9!", "up to 9 items")).toBe(true);
-    expect(defaultSupports("!up to 9", "x up to 9")).toBe(true);
+    expect(defaultSupports("!up to 9", "xup to 9")).toBe(true);
     // Containment is whole-word (hunt 2026-10-10): "9items" is a different
     // word from "9", not a match.
     expect(defaultSupports("up to 9!", "up to 9items")).toBe(false);

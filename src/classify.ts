@@ -378,19 +378,40 @@ function citationGroups(sentence: string, claimText: string, splitter: ResolvedS
 // work of supporting the group's text: an id the matcher rejects on its own
 // is accepted when the group's evidence together covers 60% of the text's
 // significant words and this id's evidence covers at least two of them (or
-// all of them, when the text has fewer than two).
-function sharedSupport(text: string, evidence: string, groupEvidence: string[]): boolean {
-  const words = significantSet(normalizeForOverlap(text));
-  if (words.size === 0) return false;
-  const own = tokenSet(normalizeForOverlap(evidence));
-  let ownHits = 0;
-  for (const w of words) if (own.has(w)) ownHits++;
-  if (ownHits < Math.min(2, words.size)) return false;
+// all of them, when the text has fewer than two). Word sets are built once
+// per group, so a large group stays linear in its size.
+interface SharedGroup {
+  union: Set<string>;
+  own: Map<string, Set<string>>;
+  words: Map<string, Set<string>>;
+}
+
+function sharedGroup(evidenceById: Map<string, string>): SharedGroup {
   const union = new Set<string>();
-  for (const ev of groupEvidence) for (const t of tokenSet(normalizeForOverlap(ev))) union.add(t);
+  const own = new Map<string, Set<string>>();
+  for (const [id, text] of evidenceById) {
+    const tokens = tokenSet(normalizeForOverlap(text));
+    own.set(id, tokens);
+    for (const t of tokens) union.add(t);
+  }
+  return { union, own, words: new Map() };
+}
+
+function sharedSupport(text: string, id: string, group: SharedGroup): boolean {
+  let words = group.words.get(text);
+  if (words === undefined) {
+    words = significantSet(normalizeForOverlap(text));
+    group.words.set(text, words);
+  }
+  const own = group.own.get(id);
+  if (words.size === 0 || own === undefined) return false;
+  let ownHits = 0;
   let covered = 0;
-  for (const w of words) if (union.has(w)) covered++;
-  return covered / words.size >= OVERLAP_SHARE;
+  for (const w of words) {
+    if (own.has(w)) ownHits++;
+    if (group.union.has(w)) covered++;
+  }
+  return ownHits >= Math.min(2, words.size) && covered / words.size >= OVERLAP_SHARE;
 }
 
 function classifyResolved(
@@ -405,35 +426,64 @@ function classifyResolved(
 
   // Each distinct (id, text) pair is asked once: a sentence that repeats one
   // id N times next to the same text costs one callback call, not N.
-  const answers = new Map<string, boolean>();
+  // Keyed by text first: the same text object is reused for every id, so its
+  // hash is computed once instead of building a long key per id.
+  const answers = new Map<string, Map<string, boolean>>();
   const ask = (id: string, text: string, evidence: string): boolean => {
-    const key = `${id}\u0000${text}`;
-    let answer = answers.get(key);
+    let byId = answers.get(text);
+    if (byId === undefined) {
+      byId = new Map();
+      answers.set(text, byId);
+    }
+    let answer = byId.get(id);
     if (answer === undefined) {
       answer = callSupports(supports, text, evidence);
-      answers.set(key, answer);
+      byId.set(id, answer);
     }
     return answer;
+  };
+  const contentMemo = new Map<string, boolean>();
+  const hasContent = (text: string): boolean => {
+    let value = contentMemo.get(text);
+    if (value === undefined) {
+      value = hasContentWords(text);
+      contentMemo.set(text, value);
+    }
+    return value;
   };
   const reasons: Record<string, CitationReason> = Object.create(null) as Record<string, CitationReason>;
   const validIds: string[] = [];
   let hasInvalid = false;
   for (const group of groups) {
-    const groupEvidence: string[] = [];
-    if (usingDefault && group.ids.length > 1) {
-      for (const id of new Set(group.ids)) {
+    // Built only when an id in a multi-id group fails on its own.
+    let shared: SharedGroup | null | undefined;
+    const getShared = (): SharedGroup | null => {
+      if (shared !== undefined) return shared;
+      const evidenceById = new Map<string, string>();
+      for (const id of group.ids) {
         const ev = lookup(id);
-        if (ev.kind === "text") groupEvidence.push(ev.text);
+        if (ev.kind === "text") evidenceById.set(id, ev.text);
       }
-    }
+      shared = evidenceById.size > 1 ? sharedGroup(evidenceById) : null;
+      return shared;
+    };
     for (const id of group.ids) {
       const ev = lookup(id);
       let reason: CitationReason;
       if (ev.kind === "missing") reason = "unknown-id";
       else if (ev.kind === "not-string") reason = "invalid-evidence";
-      else if (usingDefault && !hasContentWords(group.texts[0])) reason = "no-content-words";
       else if (group.texts.some((text) => ask(id, text, ev.text))) reason = "supported";
-      else if (groupEvidence.length > 1 && group.texts.some((text) => sharedSupport(text, ev.text, groupEvidence))) {
+      // The default matcher says no to text with nothing to compare; that is
+      // reported separately and accepted, unchecked.
+      else if (usingDefault && !hasContent(group.texts[0])) reason = "no-content-words";
+      else if (
+        usingDefault &&
+        group.ids.length > 1 &&
+        group.texts.some((text) => {
+          const g = getShared();
+          return g !== null && sharedSupport(text, id, g);
+        })
+      ) {
         reason = "supported";
       } else reason = "not-supported";
       const valid = reason === "supported" || reason === "no-content-words";
