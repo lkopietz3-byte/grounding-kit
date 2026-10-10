@@ -5,6 +5,143 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Fixes from the 2026-10-10 hunt. Statuses, exports and signatures are
+unchanged; results gain two fields, and several inputs now split or classify
+differently (listed under "Changed"). `test/verdict-table.test.ts` pins every
+case as a named document with its expected per-sentence statuses.
+
+### Fixed
+
+- **Laundering past an abbreviation.** `...by Acme Inc. [[cite:e1]] Prices
+  doubled.` was one grounded sentence. A marker or placeholder after a
+  period now ends the sentence even when the word before the period is an
+  abbreviation (`Inc.`, `etc.`, `U.S.`, `Co.`, `Dr.`, ...) or a single
+  letter, unless the text after the marker continues in lower case.
+- **Laundering past closing punctuation.** A period followed by a closing
+  quote, parenthesis, bracket, bold marker, curly quote, CJK closing bracket
+  or footnote sign (`."`, `.)`, `.**`, `.”`, `。」`, `.¹`) and a space now
+  ends the sentence, so the marker after it is peeled back. This also fixes
+  the false fail where `She said "..." [[cite:e1]] The warranty ... [[cite:e2]].`
+  was one invalid sentence.
+- **Laundering past a single letter.** A single letter before a period no
+  longer fuses unconditionally: it continues only as a name initial (`Dana
+  M. Whitfield`, `J. R. R. Tolkien`) or a reference (`p. 4`), so `Prices
+  doubled in plan B. <cited claim>` is two sentences.
+- **Laundering through a dash tail.** After a cited clause, an en dash,
+  horizontal bar, `--` or a spaced hyphen now splits like a cited colon, so
+  `<claim> [[cite:e1]] – Prices doubled.` checks `Prices doubled.` on its
+  own. `…` `‼` `⁇` `⁈` `⁉` `।` `॥` `؟` `۔` are now sentence terminators.
+- **Placeholders after a period.** `2020. [citation needed] Tickets sold
+  out.` mislabeled the second sentence as the gap, and with no space the two
+  fused into one placeholder that passed `isClean`. A placeholder after a
+  period is now peeled onto the sentence before it, like a marker.
+- **`TK` placeholder false positives.** The default placeholder pattern needs
+  a word boundary after its keyword, so `[Tkachenko 2019]`, `[TKO Group]` and
+  `[tkinter docs]` are no longer placeholders.
+- **Multi-cite false fails.** `X [[cite:e1]] and Y [[cite:e2]].` failed both
+  ids because each was judged against the whole sentence. Each citation is
+  now judged against its own span (see "Changed").
+- **Short-evidence false passes.** The default `supports` passed any claim
+  that contained the evidence string anywhere (`"Acme"` supported a
+  fabricated sentence; `"cat"` matched `"Catalog"`). Containment is now
+  whole-word, and the evidence must be at least 12 characters and 60% of the
+  claim for the containment shortcut.
+- **Scripts with combining marks and without spaces.** The default
+  `supports` stripped combining marks (Hindi vowel signs split words apart)
+  and could not partially match Chinese, Japanese or Thai. Marks now stay
+  with their letters, and unspaced scripts are compared by overlapping
+  two-character pieces.
+- **Markdown false fails.** Numbered lists, headings, rules, table header and
+  separator rows, bold labels, `Step 1.` and `IV.` each became a phantom
+  uncited sentence. See "Changed" for the new markdown handling.
+- **Abbreviation false fails.** `U.S. Department`, `e.g. Apple`, `i.e. IP68`,
+  `9 a.m. Eastern`, `Sr. García`, `Gov.`/`Sen.`/`Mt.`, `Acme Inc. CEO`,
+  `Jan. 5` and `Sept. 12` split mid-sentence. The reverse also fused: `Ask
+  us. 24 hours later` and `etc. iPhone cases` were one sentence.
+- **Other false fails.** Hard-wrapped lines split per line; a `;` inside
+  parentheses or an HTML entity (`&amp;`) split a clause; a URL after a
+  citation split at its `:`; markdown link targets and bare URLs diluted the
+  word overlap; CR-only and U+2028/U+2029 line breaks did not separate lines.
+- **Silent configuration mistakes.** An unknown key in `config` or
+  `abbreviations` was ignored; it now throws a `TypeError`. An abbreviation
+  entry written with a dot (`"dr."`) never matched; entries are now compared
+  without dots, and an entry that could never match (a digit, a space) throws.
+
+### Changed (behavior)
+
+- **Per-citation spans.** In a sentence with several groups of citations,
+  each group is judged against its span (the text since the previous group,
+  plus the trailing text for the last group). A span with three or more
+  content words is judged on its own; a span with one or two is accepted if
+  the whole sentence or the span passes; an empty span uses the whole
+  sentence. Who notices: a sentence where a citation sits next to a claim it
+  doesn't support now fails even if that id supports the whole sentence
+  (`Prices doubled last spring [[cite:e1]] while <e1's claim> [[cite:e1]].`),
+  and a custom `supports` may now receive a span instead of the whole
+  sentence and be called once per distinct (id, text) pair.
+- **Shared citation groups (default matcher).** Ids cited side by side may
+  share the work: an id that fails alone is accepted when the group's
+  evidence together covers 60% of the content words and this id covers at
+  least two.
+- **`reasons` on every `SentenceClassification`**: per distinct id,
+  `supported`, `no-content-words`, `not-supported`, `invalid-evidence` or
+  `unknown-id`. Code that deep-compares whole result objects will see the new
+  field.
+- **No-content claims.** With the default `supports`, a citation on a
+  sentence with no word longer than three characters and no number (`Yes
+  [[cite:e1]].`) is accepted unchecked with the reason `no-content-words`
+  instead of being `invalid`. A claim with no long word but a number (`Tax is
+  5%`) is compared by its numbers. `defaultSupports` itself still returns
+  `false` for a claim with nothing to compare.
+- **Markdown (`config.markdown`, default `true`).** Headings that don't end
+  like a statement, rules, table header and separator rows, short emphasized
+  labels, short lead-in lines ending in a colon before a list, table or code
+  block, and fenced code blocks are set aside and listed in the new
+  `DocumentClassification.nonClaims`; one that carries a marker or
+  placeholder or ends like a statement is still checked. List numerals stay
+  with their item, and a hard-wrapped line that continues a sentence is
+  joined to it. `markdown: false` restores line-by-line plain text. Who
+  notices: markdown reports that used to fail on phantom units now pass, and
+  `splitSentences` no longer returns those lines.
+- **Default abbreviations** gain `gov sen mt lt sgt capt rev messrs cf viz`
+  (always fuse), move `eg ie` to always fuse, and gain `plc est ca phd md`,
+  the month abbreviations, and `uk eu` (context fuse). `am`, `pm` and `us`
+  count only when written with an inner period. A few context words continue
+  before a capital in a narrow context (`a.m.` before a time zone, `U.S.`
+  before a word that is not a sentence opener, `Inc.` before a title, any
+  abbreviation that starts its sentence except `no`).
+- **A placeholder at the start of a line or document** stays with the text
+  after it; elsewhere a leading placeholder is peeled onto the previous unit.
+- **`stripCitationMarkers`** changes only the text at marker sites. It no
+  longer collapses double spaces, removes the space before punctuation, or
+  trims the end of the text elsewhere, and it puts a space between words a
+  marker was glued between (`word[[cite:e1]]word` becomes `word word`).
+- **Contextual abbreviations now treat any upper-case letter as a capital**
+  (`Corp. Über` splits), not only `A-Z`.
+
+### Documented
+
+- The default matcher is described as a lexical check: a `not-supported`
+  result is a lead for review, not a forged citation. "Forged" is no longer
+  used for a weak lexical match.
+- The multi-cite rule, the markdown rules, the abbreviation rules (including
+  why the README's Spanish example puts `sr` in `alwaysFuse` while the
+  English default has it in `contextFuse`), the default marker id charset
+  (`a-z A-Z 0-9 _ -`) and what happens to anything else, the exact
+  `stripCitationMarkers` behavior, and new limits (no stemming or synonyms,
+  every sentence is a claim, unchecked markdown scaffolding, `J. Smith` after
+  a lower-case word, `no. 3`, `U.S.` before a capital).
+- The cost section states the formula and measured numbers for prose, not
+  only marker-heavy text.
+
+### Not changed
+
+- A non-string evidence value is still classified `invalid` (now with the
+  reason `invalid-evidence`) rather than throwing: ENGINEERING.md invariant 2
+  and the AGENTS.md review rules require it.
+
 ## [0.2.1] - 2026-10-07
 
 No change to the library's behavior or API.

@@ -3,21 +3,24 @@
 ## Invariants (the promises the code is tested against)
 
 1. Classification precedence is fixed: `invalid` > `placeholder` >
-   `grounded` > `ungrounded`. A forged/unknown citation always outranks an
+   `grounded` > `ungrounded`. An unknown or unsupported citation always outranks an
    honest placeholder gap.
 2. Evidence lookup is own-property-only (`Object.hasOwn` + a `typeof
    === "string"` guard). A marker id that names an inherited
    `Object.prototype` member (`"__proto__"`, `"constructor"`,
    `"toString"`, ...) or maps to a non-string value classifies as
-   `invalid`; it never throws.
-3. `splitSentences` never silently loses a visible character, with three
-   documented exceptions: the separator character itself at an accepted
-   `;` / em-dash / cited-colon clause boundary (consumed by design — see
-   README "Clause-level splitting"), a leading citation marker with
-   nothing before it anywhere in the whole document (it can't ground
-   anything, so it's dropped), and a unit made only of whitespace,
-   default-ignorable and control characters (it shows nothing, so it is not
-   a claim). Covered by a seeded-PRNG property test. Bracket matching for
+   `invalid` (reason `unknown-id` or `invalid-evidence`); it never throws.
+3. `splitSentences` never silently loses a visible character, with four
+   documented exceptions: the separator itself at an accepted clause
+   boundary (`;`, em dash, or after a cited clause a colon, `–`, `―`, a run
+   of `--`, or a spaced `-`; consumed by design, see README
+   "Clause-level splitting"), a leading citation marker with nothing before
+   it anywhere in the whole document (it can't ground anything, so it's
+   dropped), a unit made only of whitespace, default-ignorable and control
+   characters (it shows nothing, so it is not a claim), and, with
+   `markdown: true` (the default), markdown scaffolding, which
+   `classifyDocument` reports in `nonClaims` instead (README "Markdown and
+   layout"). Covered by a seeded-PRNG property test. Bracket matching for
    clause splitting fails closed: an unbalanced `[` never suppresses a later
    real split. A default-ignorable character right after a terminator, or in
    front of a marker, cannot hide a boundary.
@@ -30,12 +33,15 @@
    test, and the nested-bracket family has a hard 100,000-character time budget
    plus a scaling check. A caller-supplied regex that backtracks badly is the
    caller's configuration and is not covered. Classification is not linear in
-   the worst case: `supports` runs once per distinct cited id per sentence, so
+   the worst case: `supports` runs once per distinct (id, text) pair per sentence, so
    one sentence costs about (distinct ids) x (sentence length) with the default
-   `supports`, and one id repeated many times costs one call.
+   `supports` when its citations sit together; spread out, each is judged
+   against its own span. One (id, text) pair repeated many times costs one
+   call.
 6. Internal code never mutates a caller-supplied `RegExp` (or the
    `lastIndex` of `DEFAULT_MARKER_PATTERN`/`DEFAULT_PLACEHOLDER_PATTERN`):
-   it scans with a private global, non-sticky copy. `DEFAULT_ABBREVIATIONS`
+   it scans with private copies (global and non-sticky to find matches,
+   sticky only to test one position). `DEFAULT_ABBREVIATIONS`
    is frozen (object + both arrays).
 7. Zero runtime dependencies.
 8. A marker match of zero characters throws `GroundingConfigError`; the
