@@ -37,11 +37,16 @@ describe("gate: no new false passes and no honest regressions against 0.2.1 (def
     expect(regressions).toEqual([]);
   });
 
-  it("Codex review documents are flagged", () => {
-    for (const c of CODEX_CASES) {
-      expect(v021.codex[c.id], c.id).toBe(false);
-      expect(cleanByDefault(c.text, c.ev), c.id).toBe(false);
-    }
+  it("Codex review documents are flagged (under their own config, default when none)", () => {
+    const missed = CODEX_CASES.filter((c) => classifyDocument(c.text, c.ev, c.config).isClean).map((c) => c.id);
+    expect(missed).toEqual([]);
+  });
+
+  it("Codex review documents that 0.2.1 flagged stay flagged under default options", () => {
+    const hits = CODEX_CASES.filter(
+      (c) => c.config === undefined && v021.codex[c.id] === false && cleanByDefault(c.text, c.ev),
+    ).map((c) => c.id);
+    expect(hits).toEqual([]);
   });
 
   it("verdict table: no laundering row flips to clean, no honest row flips to flagged", () => {

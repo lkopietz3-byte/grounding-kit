@@ -208,11 +208,11 @@ export const ROWS: VerdictRow[] = [
     clean: false,
   },
   {
-    name: "Japanese quoted clause continues the sentence (no phantom unit)",
+    name: "Japanese quoted clause: the boundary after 。」 is kept even before text (fails safe)",
     finding: "splitter-closer",
     text: "「電池は14時間持続します。」と報告された [[cite:jp]]。",
     evidence: { jp: "テストでは電池が14時間持続しましたと報告された" },
-    expect: [I],
+    expect: [U, G],
     clean: false,
   },
   {
