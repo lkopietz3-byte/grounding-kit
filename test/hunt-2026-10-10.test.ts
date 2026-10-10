@@ -77,8 +77,9 @@ describe("per-id reasons", () => {
     expect(classifySentence("Claim [[cite:nope]].", evidence).reasons).toEqual({ nope: "unknown-id" });
     expect(classifySentence("Claim [[cite:bad]].", evidence).reasons).toEqual({ bad: "invalid-evidence" });
     const yes = classifySentence("Yes [[cite:e1]].", evidence);
-    expect(yes.status).toBe("grounded");
+    expect(yes.status).toBe("invalid");
     expect(yes.reasons).toEqual({ e1: "no-content-words" });
+    expect(classifySentence("It's 99% [[cite:e1]].", evidence).reasons).toEqual({ e1: "no-content-words" });
   });
 
   it("is empty for an uncited sentence and keeps a prototype-named id as an ordinary key", () => {
@@ -139,20 +140,27 @@ describe("multi-cite spans", () => {
 describe("nonClaims", () => {
   const text = "# Title\n\n---\n\n| A | B |\n|---|---|\n| x | y [[cite:e1]] |\n\n**Note**\n\n```\ncode line\n```\n";
 
-  it("lists the scaffolding that was set aside, in order", () => {
+  it("by default sets aside only lines that hold no claim", () => {
     const doc = classifyDocument(text, { e1: "x y" });
+    expect(doc.nonClaims).toEqual(["---", "|---|---|", "```", "```"]);
+    expect(doc.sentences.map((s) => s.sentence)).toEqual([
+      "# Title",
+      "| A | B |",
+      "| x | y [[cite:e1]] |",
+      "**Note**",
+      "code line",
+    ]);
+  });
+
+  it("with markdown: true lists the scaffolding that was set aside, in order", () => {
+    const doc = classifyDocument(text, { e1: "x y" }, { markdown: true });
     expect(doc.nonClaims).toEqual(["# Title", "---", "| A | B |", "|---|---|", "**Note**", "```\ncode line\n```"]);
     expect(doc.sentences.map((s) => s.sentence)).toEqual(["| x | y [[cite:e1]] |"]);
   });
 
-  it("is empty with markdown: false, and every line is judged", () => {
-    const doc = classifyDocument(text, { e1: "x y" }, { markdown: false });
-    expect(doc.nonClaims).toEqual([]);
-    expect(doc.sentences.length).toBeGreaterThan(5);
-  });
-
   it("splitSentences leaves scaffolding out too", () => {
-    expect(splitSentences("## Battery\n\nIt lasts.\n\n***")).toEqual(["It lasts."]);
+    expect(splitSentences("## Battery\n\nIt lasts.\n\n***\n\n1.")).toEqual(["## Battery", "It lasts."]);
+    expect(splitSentences("## Battery\n\nIt lasts.\n\n***", { markdown: true })).toEqual(["It lasts."]);
   });
 });
 
@@ -181,9 +189,14 @@ describe("defaultSupports details", () => {
     expect(defaultSupports("बैटरी चौदह घंटे तक चलती है", "परीक्षण में बैटरी लगभग चौदह घंटे तक चलती है")).toBe(true);
   });
 
-  it("compares unspaced scripts by character pairs", () => {
-    expect(defaultSupports("電池は14時間持続します", "テストでは電池が14時間持続しました")).toBe(true);
+  it("compares unspaced scripts by character pairs, all of which must appear", () => {
+    expect(defaultSupports("電池が14時間持続", "テストでは電池が14時間持続しました")).toBe(true);
     expect(defaultSupports("価格は二倍になった", "テストでは電池が14時間持続しました")).toBe(false);
+    // An inserted negation or a changed number adds a piece the evidence lacks.
+    expect(defaultSupports("该耳机不支持防水功能", "该耳机支持防水功能。")).toBe(false);
+    expect(defaultSupports("Acme X3耳机单次充电续航200小时", "Acme X3耳机单次充电续航20小时。")).toBe(false);
+    // A paraphrase that rewords the evidence is a miss (0.2.1 missed it too).
+    expect(defaultSupports("電池は14時間持続します", "テストでは電池が14時間持続しました")).toBe(false);
   });
 
   it("ignores link targets and bare URLs", () => {
@@ -195,9 +208,9 @@ describe("defaultSupports details", () => {
     ).toBe(true);
   });
 
-  it("checks a short numeric claim by its numbers", () => {
-    expect(defaultSupports("Tax is 5%", "the tax rate is 5%")).toBe(true);
+  it("has nothing to compare in a claim of short words and numbers", () => {
     expect(defaultSupports("Tax is 9%", "the tax rate is 5%")).toBe(false);
+    expect(defaultSupports("It's 129 g", "The Acme X3 retails for $129")).toBe(false);
   });
 });
 
@@ -249,7 +262,16 @@ We could not verify the exact refund processing time [citation needed].
     ]);
     expect(splitSentences("Sr. García reviewed it.")).toEqual(["Sr. García reviewed it."]);
     expect(splitSentences("The answer is no. 3 people disagreed.")).toEqual(["The answer is no. 3 people disagreed."]);
-    expect(splitSentences("Sales grew in the U.S. Prices rose.")).toEqual(["Sales grew in the U.S. Prices rose."]);
+    expect(splitSentences("Sales grew in the U.S. Prices rose.")).toEqual(["Sales grew in the U.S.", "Prices rose."]);
+    expect(splitSentences("Sales grew in the UK. Prices rose.")).toEqual(["Sales grew in the UK.", "Prices rose."]);
+    expect(splitSentences("Gov. Rivera signed it. It shipped Jan. 5, 2024 to stores.")).toEqual([
+      "Gov. Rivera signed it.",
+      "It shipped Jan. 5, 2024 to stores.",
+    ]);
+    expect(splitSentences("Acme shipped a firmware rev. The update helped.")).toEqual([
+      "Acme shipped a firmware rev.",
+      "The update helped.",
+    ]);
     expect(splitSentences("Data came from the U.S. The rest came later.")).toEqual([
       "Data came from the U.S.",
       "The rest came later.",
@@ -258,13 +280,23 @@ We could not verify the exact refund processing time [citation needed].
     expect(splitSentences("See p. 4 for details.", { abbreviations: { alwaysFuse: [], contextFuse: [] } })).toEqual([
       "See p. 4 for details.",
     ]);
-    expect(splitSentences("According to J. Smith, it works.")).toEqual(["According to J.", "Smith, it works."]);
+    expect(splitSentences("According to J. Smith, it works.")).toEqual(["According to J. Smith, it works."]);
+    expect(splitSentences("We chose Plan B. The vendor agreed.")).toEqual(["We chose Plan B.", "The vendor agreed."]);
+    expect(splitSentences("We hired Agent K. Prices doubled.")).toEqual(["We hired Agent K. Prices doubled."]);
+    expect(splitSentences("The U.S. Department of Energy agreed.")).toEqual(["The U.S.", "Department of Energy agreed."]);
+    expect(splitSentences("Brands, e.g. Apple, agreed.")).toEqual(["Brands, e.g.", "Apple, agreed."]);
+    expect(splitSentences("It opens at 9 a.m. ET daily. It closes at noon.")).toEqual([
+      "It opens at 9 a.m. ET daily.",
+      "It closes at noon.",
+    ]);
   });
 
   it("markdown section examples", () => {
     expect(
-      splitSentences("Prices doubled last spring\nThe battery lasts 14 hours [[cite:e1]]."),
+      splitSentences("Prices doubled last spring\nThe battery lasts 14 hours [[cite:e1]].", { markdown: true }),
     ).toEqual(["Prices doubled last spring", "The battery lasts 14 hours [[cite:e1]]."]);
-    expect(splitSentences("## Prices doubled in 2025.\n## Battery")).toEqual(["## Prices doubled in 2025."]);
+    expect(splitSentences("## Prices doubled in 2025.\n## Battery", { markdown: true })).toEqual([
+      "## Prices doubled in 2025.",
+    ]);
   });
 });

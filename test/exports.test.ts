@@ -14,15 +14,14 @@ describe("DEFAULT_ABBREVIATIONS", () => {
   it("documents its exact contents", () => {
     expect(DEFAULT_ABBREVIATIONS.alwaysFuse).toEqual([
       "mr", "mrs", "ms", "dr", "prof", "hon", "st", "v", "vs",
-      "gov", "sen", "mt", "lt", "sgt", "capt", "rev", "messrs",
-      "eg", "ie", "cf", "viz",
     ]);
     expect(DEFAULT_ABBREVIATIONS.contextFuse).toEqual([
-      "no", "inc", "co", "corp", "ltd", "llc", "plc", "dept", "vol", "ed",
-      "al", "etc", "approx", "est", "ca", "fig", "p", "pp", "jr", "sr",
-      "phd", "md",
+      "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
+      "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
+      "am", "pm", "us",
+      "plc", "est", "ca", "cf", "viz", "phd", "md", "uk", "eu",
+      "gov", "sen", "mt", "lt", "sgt", "capt", "messrs",
       "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
-      "am", "pm", "us", "uk", "eu",
     ]);
   });
 

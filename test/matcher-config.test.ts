@@ -416,14 +416,7 @@ describe("supports() runs once per distinct cited id within a sentence", () => {
       const sentence = `Claim${"x".repeat(Math.floor(rand() * 5))} ${cites.map((id) => `[[cite:${id}]]`).join(" and ")}.`;
       const result = classifySentence(sentence, map, { supports: pure });
       const claim = stripCitationMarkers(sentence);
-      // Multi-cite rule (hunt 2026-10-10): with several groups, the first
-      // group's short span ("Claimxx") is accepted if the whole sentence or
-      // the span passes; the later spans ("and") have no content words and use
-      // the whole sentence.
-      const head = sentence.slice(0, sentence.indexOf(" [[cite:"));
-      const passes = (k: number, id: string) =>
-        pure(claim, map[id]) || (cites.length > 1 && k === 0 && pure(head, map[id]));
-      const expectedValid = cites.filter((id, k) => Object.hasOwn(map, id) && passes(k, id));
+      const expectedValid = cites.filter((id) => Object.hasOwn(map, id) && pure(claim, map[id]));
       expect(result.citedIds).toEqual(cites);
       expect(result.validIds).toEqual(expectedValid);
       expect(result.status).toBe(expectedValid.length === cites.length ? "grounded" : "invalid");
