@@ -402,7 +402,7 @@ against:
   sentence, so the cost is (distinct ids) x (sentence length).
 
 Measured with the default `supports` on a developer laptop under heavy load
-(numbers vary with the machine)::
+(numbers vary with the machine):
 
 - a 154,000-character sentence with 1,000 different ids spread through it:
   about 0.1 s (0.2.1, which judged every id against the whole sentence, took
