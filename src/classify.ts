@@ -35,9 +35,10 @@ export type SentenceStatus = "grounded" | "placeholder" | "ungrounded" | "invali
  * - `"not-supported"` — `supports()` returned false for the text the id is
  *   attached to. With the default lexical matcher this means "not enough
  *   word overlap", a lead for review rather than proof of a forged citation.
- * - `"no-content-words"` — the default matcher had nothing to compare (the
- *   text has no word longer than three characters and no number, such as
- *   "Yes [[cite:e1]]."). The id exists, so it is accepted, unchecked. Only
+ * - `"no-content-words"` — the default matcher had nothing to compare: the
+ *   text has no word longer than three characters ("Yes [[cite:e1]].", "It's
+ *   99% [[cite:e1]]."). Nothing shows the citation backs the text, so the id
+ *   is not accepted, but this is a different finding from a mismatch. Only
  *   produced with the default `supports`.
  * - `"supported"` — accepted by `supports()`.
  */
@@ -98,14 +99,31 @@ const UNSPACED_RUN = new RegExp(`(?:${UNSPACED_CHAR}\\p{M}*)+`, "gu");
 const HAS_UNSPACED = new RegExp(UNSPACED_CHAR, "u");
 const HAS_DIGIT = /\p{N}/u;
 
+// Drop markdown link targets ("[text](https://...)" keeps "text"), in one
+// forward pass: a regex here retried the rest of the text from every "](" on
+// input like "](](](...".
+function dropLinkTargets(s: string): string {
+  let out = "";
+  let last = 0;
+  let i = s.indexOf("](");
+  while (i >= 0) {
+    let j = i + 2;
+    while (j < s.length && s[j] !== ")" && !/\s/u.test(s[j])) j++;
+    if (s[j] === ")") {
+      out += `${s.slice(last, i + 1)} `;
+      last = j + 1;
+      i = s.indexOf("](", last);
+    } else {
+      i = s.indexOf("](", j);
+    }
+  }
+  return out + s.slice(last);
+}
+
 function normalizeForOverlap(s: string): string {
   return (
-    s
-      .normalize("NFC")
-      .toLowerCase()
-      // A markdown link keeps its text and drops its target; a bare URL is
-      // dropped. Neither is a claim word.
-      .replace(/\]\([^)\s]*\)/g, "] ")
+    dropLinkTargets(s.normalize("NFC").toLowerCase())
+      // A bare URL is dropped: it is not a claim word.
       .replace(/\b(?:https?|ftp):\/\/\S+/g, " ")
       // Letters keep their combining marks (\p{M}): a Hindi vowel sign or an
       // Arabic diacritic is part of the word, not punctuation.
@@ -118,88 +136,152 @@ function normalizeForOverlap(s: string): string {
 interface Token {
   text: string;
   significant: boolean;
+  // Must appear in the evidence: every piece of an unspaced-script run, and
+  // any number written inside such a run.
+  required: boolean;
 }
 
 // Words, with any run of an unspaced script turned into overlapping
 // two-character pieces ("電池持続" -> 電池, 池持, 持続). A word is
-// significant when it is longer than three characters; every unspaced piece
-// is significant.
+// significant when it is longer than three characters. Unspaced pieces, and
+// numbers written inside unspaced text, are significant and required: every
+// one must appear in the evidence, so a changed number or an inserted
+// negation ("不") fails.
 function tokenize(normalized: string): Token[] {
   const out: Token[] = [];
   if (normalized === "") return out;
   for (const word of normalized.split(" ")) {
     if (!HAS_UNSPACED.test(word)) {
-      out.push({ text: word, significant: word.length > 3 });
+      out.push({ text: word, significant: word.length > 3, required: false });
       continue;
     }
+    const other = (text: string) => {
+      const numeric = HAS_DIGIT.test(text);
+      out.push({ text, significant: numeric || text.length > 3, required: numeric });
+    };
     let last = 0;
     for (const m of word.matchAll(UNSPACED_RUN)) {
-      const other = word.slice(last, m.index);
-      if (other) out.push({ text: other, significant: other.length > 3 });
+      if (m.index > last) other(word.slice(last, m.index));
       const chars = Array.from(m[0]);
-      if (chars.length === 1) out.push({ text: chars[0], significant: true });
+      if (chars.length === 1) out.push({ text: chars[0], significant: true, required: true });
       for (let i = 0; i + 1 < chars.length; i++) {
-        out.push({ text: chars[i] + chars[i + 1], significant: true });
+        out.push({ text: chars[i] + chars[i + 1], significant: true, required: true });
       }
       last = m.index + m[0].length;
     }
-    const tail = word.slice(last);
-    if (tail) out.push({ text: tail, significant: tail.length > 3 });
+    if (last < word.length) other(word.slice(last));
   }
   return out;
 }
 
-// The words that count toward the overlap ratio: words longer than three
-// characters and every unspaced-script piece. When there is none, words with a
-// digit count instead, so a short numeric claim ("Tax is 5%") is still
-// compared rather than passed unchecked.
-function significantSet(normalized: string): Set<string> {
-  const set = new Set<string>();
-  const numeric = new Set<string>();
-  for (const t of tokenize(normalized)) {
-    if (t.significant) set.add(t.text);
-    else if (HAS_DIGIT.test(t.text)) numeric.add(t.text);
-  }
-  return set.size > 0 ? set : numeric;
+/** A claim normalized once, so it can be compared with many evidence texts. */
+interface PreparedClaim {
+  padded: string;
+  length: number;
+  significant: Set<string>;
+  required: Set<string>;
 }
 
-function tokenSet(normalized: string): Set<string> {
-  return new Set(tokenize(normalized).map((t) => t.text));
+function prepareClaim(text: string): PreparedClaim {
+  const normalized = normalizeForOverlap(text);
+  const significant = new Set<string>();
+  const required = new Set<string>();
+  for (const t of tokenize(normalized)) {
+    if (t.significant) significant.add(t.text);
+    if (t.required) required.add(t.text);
+  }
+  return { padded: ` ${normalized} `, length: normalized.length, significant, required };
+}
+
+/** Evidence normalized once per classification call. */
+interface PreparedEvidence {
+  padded: string;
+  length: number;
+  tokens: Set<string>;
+  significantCount: number;
+}
+
+function prepareEvidence(text: string): PreparedEvidence {
+  const normalized = normalizeForOverlap(text);
+  const all = tokenize(normalized);
+  return {
+    padded: ` ${normalized} `,
+    length: normalized.length,
+    tokens: new Set(all.map((t) => t.text)),
+    significantCount: new Set(all.filter((t) => t.significant).map((t) => t.text)).size,
+  };
 }
 
 /** How many distinct words in `text` the default matcher would compare. */
 function contentWordCount(text: string): number {
-  return significantSet(normalizeForOverlap(text)).size;
-}
-
-/** Whether `text` has anything the default matcher can compare. */
-function hasContentWords(text: string): boolean {
-  return contentWordCount(text) > 0;
+  return prepareClaim(text).significant.size;
 }
 
 // A span with fewer content words than this is too short to judge on its own
-// ("According to the lab [[cite:a]], ..."): its citation is also accepted if
-// it supports the whole sentence, as in 0.2.1.
+// ("According to the lab [[cite:a]], ..."): its citation is judged against the
+// whole sentence instead, as in 0.2.1.
 const MIN_SPAN_WORDS = 3;
 
 // The "claim contains the evidence" shortcut needs the evidence to be a
-// whole-word phrase of at least this many characters and at least
-// CONTAINED_SHARE of the claim, so a short evidence string ("Acme") cannot
-// support a long fabricated sentence that merely mentions it.
+// whole-word phrase of at least 12 characters and three significant words, so
+// a short evidence string ("Acme", "cat") cannot support a long fabricated
+// sentence that merely mentions it.
 const MIN_CONTAINED_EVIDENCE = 12;
-const CONTAINED_SHARE = 0.6;
+const MIN_CONTAINED_WORDS = 3;
 const OVERLAP_SHARE = 0.6;
+
+// Whether `evidence` is long enough to count as contained in the claim, and is.
+function containedIn(claim: PreparedClaim, evidence: PreparedEvidence): boolean {
+  return (
+    evidence.length >= MIN_CONTAINED_EVIDENCE &&
+    evidence.significantCount >= MIN_CONTAINED_WORDS &&
+    claim.padded.includes(evidence.padded)
+  );
+}
+
+// The share of the claim's significant words that the given evidence texts
+// cover together.
+function coverage(claim: PreparedClaim, evidence: readonly PreparedEvidence[]): number {
+  if (claim.significant.size === 0) return 0;
+  let covered = 0;
+  for (const w of claim.significant) if (evidence.some((e) => e.tokens.has(w))) covered++;
+  return covered / claim.significant.size;
+}
+
+// `group` is the evidence of every id cited side by side with this one. The
+// "claim contains the evidence" shortcut holds only when the evidence texts
+// the claim contains cover 60% of its words together, so "<evidence> and
+// <fabricated claim>" does not pass, while "<evidence A> and <evidence B>
+// [[cite:a]][[cite:b]]" does.
+function supportsPrepared(
+  claim: PreparedClaim,
+  evidence: PreparedEvidence,
+  containedShare: () => number = () => coverage(claim, [evidence]),
+): boolean {
+  if (claim.length === 0 || evidence.length === 0) return false;
+  if (claim.length <= evidence.length && evidence.padded.includes(claim.padded)) return true;
+  if (containedIn(claim, evidence) && containedShare() >= OVERLAP_SHARE) return true;
+  if (claim.significant.size === 0) return false;
+  for (const w of claim.required) if (!evidence.tokens.has(w)) return false;
+  // Only the claim's significant words are looked up, so short evidence words never matter.
+  let overlap = 0;
+  for (const w of claim.significant) if (evidence.tokens.has(w)) overlap++;
+  return overlap / claim.significant.size >= OVERLAP_SHARE;
+}
 
 /**
  * Default `supports()`: naive substring-or-word-overlap check, NOT semantic
  * entailment. Returns true if:
  * - the normalized claim appears in the normalized evidence as whole words, or
  * - the normalized evidence appears in the claim as whole words, is at least
- *   12 characters, and is at least 60% of the claim's length, or
+ *   12 characters with three significant words, and covers 60% of the
+ *   claim's significant words (when classifying, evidence cited side by side
+ *   that the claim also contains counts toward that 60%), or
  * - at least 60% of the claim's significant words (longer than three
- *   characters; numbers only when there is no such word) also appear in the
- *   evidence. Text in an unspaced script (Chinese, Japanese, Thai, ...) is
- *   compared by overlapping two-character pieces instead of words.
+ *   characters) also appear in the evidence. Text in an unspaced script
+ *   (Chinese, Japanese, Thai, ...) is compared by overlapping two-character
+ *   pieces instead of words, and every piece (and any number written inside
+ *   that text) must appear in the evidence.
  * A claim with no significant word returns false. This catches
  * paraphrase-free grounding and obvious mismatches; it will both miss real
  * paraphrases and pass some coincidental word overlap. Replace it for
@@ -211,26 +293,8 @@ const OVERLAP_SHARE = 0.6;
  * collapsed. The NFC step means a claim and its evidence written with the
  * same accented text in different (both valid) Unicode forms still match.
  */
-export const defaultSupports: SupportsFn = (sentenceText, evidenceText) => {
-  const claim = normalizeForOverlap(sentenceText);
-  const evidence = normalizeForOverlap(evidenceText);
-  if (!claim || !evidence) return false;
-  if (` ${evidence} `.includes(` ${claim} `)) return true;
-  if (
-    evidence.length >= MIN_CONTAINED_EVIDENCE &&
-    evidence.length >= CONTAINED_SHARE * claim.length &&
-    ` ${claim} `.includes(` ${evidence} `)
-  ) {
-    return true;
-  }
-  const claimWords = significantSet(claim);
-  if (claimWords.size === 0) return false;
-  // Only the claim's significant words are looked up, so short evidence words never matter.
-  const evidenceWords = tokenSet(evidence);
-  let overlap = 0;
-  for (const w of claimWords) if (evidenceWords.has(w)) overlap++;
-  return overlap / claimWords.size >= OVERLAP_SHARE;
-};
+export const defaultSupports: SupportsFn = (sentenceText, evidenceText) =>
+  supportsPrepared(prepareClaim(sentenceText), prepareEvidence(evidenceText));
 
 /**
  * Options for `classifySentence`/`classifyDocument`: splitting config plus the
@@ -329,25 +393,22 @@ function callSupports(supports: SupportsFn, claimText: string, evidence: string)
 }
 
 /**
- * A run of citation markers with no letters or digits between them, and the
- * texts each of its citations may be accepted for, in the order they are
- * tried.
+ * A run of citation markers with no letters or digits between them. `span`
+ * is the text it is attached to, when the sentence has several groups and the
+ * span has at least three content words; otherwise null.
  */
 interface CitationGroup {
   ids: string[];
-  texts: string[];
+  span: string | null;
 }
 
 const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
-// Group the sentence's markers and give each group the text it is attached
-// to. With one group, that is the whole marker-free sentence (the 0.2.1
-// rule). With several, a group covers its span: the text since the previous
-// group (or the start), plus, for the last group, any text after it. A span
-// with three or more content words is judged on its own. A shorter one
-// ("According to the lab", "and costs $1,299") is accepted if the whole
-// sentence or the span passes, and a span with no content words ("and")
-// uses the whole sentence.
+// Group the sentence's markers and find the span each group is attached to:
+// the text since the previous group (or the start), plus, for the last group,
+// any text after it. A sentence with one group, or a span with fewer than
+// three content words ("According to the lab", "and"), has no span of its
+// own: its citations are judged against the whole sentence, as in 0.2.1.
 function citationGroups(sentence: string, claimText: string, splitter: ResolvedSplitter): CitationGroup[] {
   const sites = markerSitesOf(sentence, splitter.marker);
   const groups: Array<{ ids: string[]; start: number; end: number }> = [];
@@ -361,75 +422,58 @@ function citationGroups(sentence: string, claimText: string, splitter: ResolvedS
     previousEnd = site.end;
   }
   const withIds = groups.filter((g) => g.ids.length > 0);
-  if (withIds.length <= 1) return withIds.map((g) => ({ ids: g.ids, texts: [claimText] }));
+  if (withIds.length <= 1) return withIds.map((g) => ({ ids: g.ids, span: null }));
   return withIds.map((g, k) => {
     const from = k === 0 ? 0 : withIds[k - 1].end;
     const head = sentence.slice(from, g.start).trimEnd();
     const tail = k === withIds.length - 1 ? sentence.slice(g.end) : "";
     const glue = HAS_LETTER_OR_DIGIT.test(head.slice(-1)) && HAS_LETTER_OR_DIGIT.test(tail.slice(0, 1)) ? " " : "";
     const span = stripMarkersOf(head + glue + tail, splitter.marker).trim();
-    const words = contentWordCount(span);
-    const texts = words === 0 ? [claimText] : words < MIN_SPAN_WORDS ? [claimText, span] : [span];
-    return { ids: g.ids, texts };
+    return { ids: g.ids, span: span !== claimText && contentWordCount(span) >= MIN_SPAN_WORDS ? span : null };
   });
 }
 
-// With the default matcher, ids cited together in one group may share the
-// work of supporting the group's text: an id the matcher rejects on its own
-// is accepted when the group's evidence together covers 60% of the text's
-// significant words and this id's evidence covers at least two of them (or
-// all of them, when the text has fewer than two). Word sets are built once
-// per group, so a large group stays linear in its size.
-interface SharedGroup {
-  union: Set<string>;
-  own: Map<string, Set<string>>;
-  words: Map<string, Set<string>>;
-}
-
-function sharedGroup(evidenceById: Map<string, string>): SharedGroup {
-  const union = new Set<string>();
-  const own = new Map<string, Set<string>>();
-  for (const [id, text] of evidenceById) {
-    const tokens = tokenSet(normalizeForOverlap(text));
-    own.set(id, tokens);
-    for (const t of tokens) union.add(t);
-  }
-  return { union, own, words: new Map() };
-}
-
-function sharedSupport(text: string, id: string, group: SharedGroup): boolean {
-  let words = group.words.get(text);
-  if (words === undefined) {
-    words = significantSet(normalizeForOverlap(text));
-    group.words.set(text, words);
-  }
-  const own = group.own.get(id);
-  if (words.size === 0 || own === undefined) return false;
-  let ownHits = 0;
-  let covered = 0;
-  for (const w of words) {
-    if (own.has(w)) ownHits++;
-    if (group.union.has(w)) covered++;
-  }
-  return ownHits >= Math.min(2, words.size) && covered / words.size >= OVERLAP_SHARE;
+// Whether `evidence` backs every content word of `span`: the span appears in
+// it, or every significant word (and every required piece) of the span is in
+// it. Used for the per-span rule, which may only add passes, so it demands
+// full coverage instead of the 60% the whole-sentence check allows.
+function fullyCovers(span: PreparedClaim, evidence: PreparedEvidence): boolean {
+  if (span.significant.size < MIN_SPAN_WORDS) return false;
+  if (span.length <= evidence.length && evidence.padded.includes(span.padded)) return true;
+  for (const w of span.required) if (!evidence.tokens.has(w)) return false;
+  for (const w of span.significant) if (!evidence.tokens.has(w)) return false;
+  return true;
 }
 
 function classifyResolved(
   sentence: string,
   lookup: (id: string) => Evidence,
   { splitter, supports }: ResolvedClassify,
+  preparedEvidence: Map<string, PreparedEvidence>,
 ): SentenceClassification {
   const claimText = stripMarkersOf(sentence, splitter.marker).trim();
   const groups = citationGroups(sentence, claimText, splitter);
-  const citedIds = groups.flatMap((g) => g.ids);
+  const citedIds: string[] = [];
+  for (const g of groups) for (const id of g.ids) citedIds.push(id);
   const usingDefault = supports === defaultSupports;
 
-  // Each distinct (id, text) pair is asked once: a sentence that repeats one
-  // id N times next to the same text costs one callback call, not N.
-  // Keyed by text first: the same text object is reused for every id, so its
-  // hash is computed once instead of building a long key per id.
+  // With the default matcher, the sentence (and each span) is normalized once
+  // and each evidence value once per call, so many ids on one long sentence
+  // cost about the sentence length plus the evidence lengths.
+  let claim: PreparedClaim | undefined;
+  const claimPrepared = (): PreparedClaim => (claim ??= prepareClaim(claimText));
+  const evidenceFor = (id: string, text: string): PreparedEvidence => {
+    let ev = preparedEvidence.get(id);
+    if (ev === undefined) {
+      ev = prepareEvidence(text);
+      preparedEvidence.set(id, ev);
+    }
+    return ev;
+  };
+  // A custom `supports` is asked once per distinct (id, text) pair in the
+  // sentence. Keyed by text first, so a long text is hashed once.
   const answers = new Map<string, Map<string, boolean>>();
-  const ask = (id: string, text: string, evidence: string): boolean => {
+  const askCustom = (id: string, text: string, evidence: string): boolean => {
     let byId = answers.get(text);
     if (byId === undefined) {
       byId = new Map();
@@ -442,52 +486,58 @@ function classifyResolved(
     }
     return answer;
   };
-  const contentMemo = new Map<string, boolean>();
-  const hasContent = (text: string): boolean => {
-    let value = contentMemo.get(text);
-    if (value === undefined) {
-      value = hasContentWords(text);
-      contentMemo.set(text, value);
-    }
-    return value;
-  };
+
   const reasons: Record<string, CitationReason> = Object.create(null) as Record<string, CitationReason>;
   const validIds: string[] = [];
   let hasInvalid = false;
   for (const group of groups) {
-    // Built only when an id in a multi-id group fails on its own.
-    let shared: SharedGroup | null | undefined;
-    const getShared = (): SharedGroup | null => {
-      if (shared !== undefined) return shared;
-      const evidenceById = new Map<string, string>();
-      for (const id of group.ids) {
-        const ev = lookup(id);
-        if (ev.kind === "text") evidenceById.set(id, ev.text);
+    // The default verdict depends on the evidence cited side by side, so it
+    // is cached per group, not per sentence.
+    const verdicts = group.ids.length > 1 ? new Map<string, CitationReason>() : null;
+    let containedShare: number | undefined;
+    let spanClaim: PreparedClaim | undefined;
+    const groupContainedShare = (): number => {
+      if (containedShare === undefined) {
+        const c = claimPrepared();
+        const contained: PreparedEvidence[] = [];
+        for (const gid of new Set(group.ids)) {
+          const ev = lookup(gid);
+          if (ev.kind === "text") {
+            const prepared = evidenceFor(gid, ev.text);
+            if (containedIn(c, prepared)) contained.push(prepared);
+          }
+        }
+        containedShare = coverage(c, contained);
       }
-      shared = evidenceById.size > 1 ? sharedGroup(evidenceById) : null;
-      return shared;
+      return containedShare;
+    };
+    const judge = (id: string): CitationReason => {
+      const ev = lookup(id);
+      if (ev.kind === "missing") return "unknown-id";
+      if (ev.kind === "not-string") return "invalid-evidence";
+      if (usingDefault) {
+        const prepared = evidenceFor(id, ev.text);
+        // A citation is accepted when it supports the whole sentence (the
+        // 0.2.1 rule), or when it fully backs its own span, so the span rule
+        // can only add passes.
+        if (group.span !== null && fullyCovers((spanClaim ??= prepareClaim(group.span)), prepared)) {
+          return "supported";
+        }
+        if (supportsPrepared(claimPrepared(), prepared, groupContainedShare)) return "supported";
+        // Text with nothing to compare cannot be checked. That is still a
+        // failure, reported apart from a mismatch.
+        return claimPrepared().significant.size === 0 ? "no-content-words" : "not-supported";
+      }
+      if (group.span !== null && askCustom(id, group.span, ev.text)) return "supported";
+      return askCustom(id, claimText, ev.text) ? "supported" : "not-supported";
     };
     for (const id of group.ids) {
-      const ev = lookup(id);
-      let reason: CitationReason;
-      if (ev.kind === "missing") reason = "unknown-id";
-      else if (ev.kind === "not-string") reason = "invalid-evidence";
-      else if (group.texts.some((text) => ask(id, text, ev.text))) reason = "supported";
-      // The default matcher says no to text with nothing to compare; that is
-      // reported separately and accepted, unchecked.
-      else if (usingDefault && !hasContent(group.texts[0])) reason = "no-content-words";
-      else if (
-        usingDefault &&
-        group.ids.length > 1 &&
-        group.texts.some((text) => {
-          const g = getShared();
-          return g !== null && sharedSupport(text, id, g);
-        })
-      ) {
-        reason = "supported";
-      } else reason = "not-supported";
-      const valid = reason === "supported" || reason === "no-content-words";
-      if (valid) validIds.push(id);
+      let reason = verdicts?.get(id);
+      if (reason === undefined) {
+        reason = judge(id);
+        verdicts?.set(id, reason);
+      }
+      if (reason === "supported") validIds.push(id);
       else hasInvalid = true;
       const prior = reasons[id];
       if (prior === undefined || REASON_RANK[reason] > REASON_RANK[prior]) reasons[id] = reason;
@@ -538,7 +588,7 @@ export function classifySentence(
 ): SentenceClassification {
   assertString(sentence, "sentence");
   assertPlainObject(evidenceMap, "evidenceMap");
-  return classifyResolved(sentence, evidenceLookup(evidenceMap), resolveClassify(config));
+  return classifyResolved(sentence, evidenceLookup(evidenceMap), resolveClassify(config), new Map());
 }
 
 /** Whole-document result of `classifyDocument`. */
@@ -595,7 +645,8 @@ export function classifyDocument(
   const resolved = resolveClassify(config);
   const lookup = evidenceLookup(evidenceMap);
   const { units, nonClaims } = splitResolved(text, resolved.splitter);
-  const sentences = units.map((sentence) => classifyResolved(sentence, lookup, resolved));
+  const preparedEvidence = new Map<string, PreparedEvidence>();
+  const sentences = units.map((sentence) => classifyResolved(sentence, lookup, resolved, preparedEvidence));
 
   const counts: Record<SentenceStatus, number> = {
     grounded: 0,

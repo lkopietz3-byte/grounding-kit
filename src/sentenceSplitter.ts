@@ -50,23 +50,23 @@ export interface AbbreviationConfig {
 export const DEFAULT_ABBREVIATIONS: AbbreviationConfig = Object.freeze({
   alwaysFuse: Object.freeze([
     "mr", "mrs", "ms", "dr", "prof", "hon", "st", "v", "vs",
-    // Titles before a name, and Latin abbreviations that always introduce
-    // more text ("e.g. Apple", "i.e. IP68").
-    "gov", "sen", "mt", "lt", "sgt", "capt", "rev", "messrs",
-    "eg", "ie", "cf", "viz",
   ]),
   contextFuse: Object.freeze([
-    "no", "inc", "co", "corp", "ltd", "llc", "plc", "dept", "vol", "ed",
-    "al", "etc", "approx", "est", "ca", "fig", "p", "pp", "jr", "sr",
-    "phd", "md",
-    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
+    "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
     // "am"/"pm"/"us" belong here, never in alwaysFuse: they are common
     // English WORDS ("I am.", "They told us.") as often as they are
     // abbreviations ("9 a.m.", "the U.S."). They only count as abbreviations
     // when written with an inner period ("a.m.", "U.S."), and only
     // contextFuse's next-fragment check then decides whether they end the
     // sentence.
-    "am", "pm", "us", "uk", "eu",
+    "am", "pm", "us",
+    // Added 2026-10-10. Each fuses only in a narrow context (see the README
+    // section "Abbreviations"), because every fusion can join an uncited
+    // sentence to a cited one.
+    "plc", "est", "ca", "cf", "viz", "phd", "md", "uk", "eu",
+    "gov", "sen", "mt", "lt", "sgt", "capt", "messrs",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
   ]),
 });
 
@@ -118,13 +118,16 @@ export interface SplitterConfig {
   /** Replaces `DEFAULT_PLACEHOLDER_PATTERN`. */
   placeholderPattern?: RegExp;
   /**
-   * `true` (default): markdown scaffolding is not a claim. Headings that do
-   * not end like a sentence, horizontal rules, table header and separator
-   * rows, short bold labels, fenced code blocks and lone list numerals are
-   * skipped, and a hard-wrapped line that continues a sentence is joined to
-   * it. A heading, label or table header that carries a citation marker or
-   * placeholder, or that ends like a sentence, is still checked as a claim.
-   * `false`: every line is plain text, as in 0.2.1 and earlier.
+   * `false` (default): every line is checked as text, except lines that hold
+   * no claim at all (a horizontal rule, a table separator row, a bare fence
+   * line, a lone list numeral such as "1."), which are set aside.
+   *
+   * `true` (opt-in, more lenient): headings, short emphasized labels, short
+   * lead-in lines ending in a colon, table header rows and fenced code blocks
+   * are also set aside unless they carry a marker or placeholder or hold a
+   * statement, and a hard-wrapped line that continues a sentence is joined to
+   * it. This passes honest markdown reports but can hide a claim written as a
+   * heading or label; see the README section "Markdown and layout".
    */
   markdown?: boolean;
 }
@@ -175,21 +178,34 @@ const OPENERS = new Set([
   "all", "some", "many", "most", "both", "such", "what", "which", "who", "how",
   "why", "where", "no", "not", "one", "two", "three",
 ]);
-// Narrow capitalized continuations for a few known contextFuse words.
+// Narrow contexts for a few known contextFuse words. Everything else ends the
+// sentence before a capital, as in 0.2.1.
 const TIME_WORDS = new Set(["am", "pm"]);
+// Time-zone codes written in capitals ("9 a.m. ET"). Words such as "Eastern"
+// or "Pacific" are left out: they also start sentences.
 const TIME_ZONES = new Set([
-  "et", "est", "edt", "ct", "cst", "cdt", "mt", "mst", "mdt", "pt", "pst", "pdt",
-  "utc", "gmt", "bst", "cet", "cest", "ist", "jst", "aest", "eastern", "central",
-  "mountain", "pacific", "local",
+  "ET", "EST", "EDT", "CT", "CST", "CDT", "MT", "MST", "MDT", "PT", "PST", "PDT",
+  "UTC", "GMT", "BST", "CET", "CEST", "JST", "AEST",
 ]);
-const COUNTRY_WORDS = new Set(["us", "uk", "eu"]);
-const CORP_WORDS = new Set(["inc", "co", "corp", "ltd", "llc", "plc"]);
-const CORP_TITLES = new Set([
-  "ceo", "cfo", "coo", "cto", "chief", "president", "chairman", "chairwoman",
-  "chair", "founder", "spokesperson", "spokesman", "spokeswoman",
+// Titles before a name: they fuse before a capitalized word that is not a
+// sentence opener, and only when written with a capital ("Gov. Rivera", not
+// "the gov. Rivera").
+const TITLE_WORDS = new Set(["gov", "sen", "mt", "lt", "sgt", "capt", "messrs"]);
+// Words added after 0.2.1 that fuse only before lower case ("a Ph.D. in
+// chemistry", "the U.K. government", "Acme plc. announced"), never before a
+// number ("Jane Roe, MD. 9 in 10 patients...") or a capital.
+const LOWER_ONLY_WORDS = new Set(["phd", "md", "uk", "eu", "plc", "cf", "viz"]);
+// "est." and "ca." also fuse before a year or a larger number ("est. 2010",
+// "ca. 1900", "ca. 1.299 Euro").
+const YEAR_WORDS = new Set(["est", "ca"]);
+// Months fuse before a day number from 1 to 31 followed by a comma, a year or
+// the end ("Jan. 5, 2024"), not before other numbers.
+const MONTH_WORDS = new Set([
+  "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
 ]);
-// Common English words that only count as abbreviations in dotted form.
-const DOTTED_ONLY = new Set(["am", "pm", "us"]);
+// Common English words, or country codes written without dots, that only
+// count as abbreviations in dotted form ("U.S.", "U.K.", "a.m.").
+const DOTTED_ONLY = new Set(["am", "pm", "us", "uk", "eu"]);
 // A capitalized word before a single letter that names a thing, not a person:
 // "Plan B." and "Section A." can end a sentence; "Dana M." cannot.
 const LABEL_NOUNS = new Set([
@@ -283,7 +299,11 @@ function scanPlaceholders(text: string, re: RegExp): RegExpExecArray[] {
     const m = re.exec(text);
     if (m === null) return matches;
     if (m[0].length === 0) {
-      re.lastIndex = m.index + 1;
+      // Step past a whole code point under the u or v flag, so the scan
+      // never stops inside a surrogate pair and repeats the same match.
+      const cp = text.codePointAt(m.index);
+      const unicode = re.unicode || re.flags.includes("v");
+      re.lastIndex = m.index + (unicode && cp !== undefined && cp > 0xffff ? 2 : 1);
       if (re.lastIndex > text.length) return matches;
       continue;
     }
@@ -337,7 +357,7 @@ export function resolveSplitter(options: {
   const contextFuse = readStringList(abbreviations.contextFuse, "abbreviations.contextFuse");
   const markerPattern = options.markerPattern ?? DEFAULT_MARKER_PATTERN;
   const placeholderPattern = options.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
-  const markdown = options.markdown ?? true;
+  const markdown = options.markdown ?? false;
   if (typeof markdown !== "boolean") {
     throw new TypeError(`config.markdown must be a boolean (got ${describe(markdown)}).`);
   }
@@ -490,39 +510,59 @@ function trailingWord(trimmed: string): string | null {
 }
 
 // The contextFuse decision for a known abbreviation followed by `lead`.
-function contextFuses(word: string, standalone: boolean, lead: Lead): boolean {
+// `written` is the abbreviation as it appears in the text.
+function contextFuses(word: string, written: string, standalone: boolean, lead: Lead): boolean {
   if (lead.markerLed) return startsLower(lead.text);
   const t = lead.text;
   if (t === "") return false;
   const capital = /^\p{Lu}/u.test(t) || /^\p{Ll}+\p{Lu}/u.test(t);
+  if (standalone && word !== "no" && (capital || startsLower(t))) {
+    // An abbreviation with nothing before it in its fragment ("Sr. García")
+    // carries no claim of its own, so joining it to what follows is safe.
+    return true;
+  }
+  if (MONTH_WORDS.has(word)) {
+    // "Jan. 5, 2024" or "Jan. 5 2024": a day number from 1 to 31, then a
+    // comma, a year or the end. "Sept. 9 of 10 users" is a new sentence.
+    const day = /^(\d{1,2})(?:\s*[,)]|\s+\d{4}(?!\d)|\s*$)/.exec(t);
+    return day !== null && Number(day[1]) >= 1 && Number(day[1]) <= 31;
+  }
+  if (LOWER_ONLY_WORDS.has(word)) return startsLower(t);
+  if (YEAR_WORDS.has(word)) return startsLower(t) || /^(?:\d{3,4}(?![\d.,])|\d{1,3}(?:[.,]\d{3})+(?!\d))/.test(t);
+  if (TITLE_WORDS.has(word)) return capital && /^\p{Lu}/u.test(written) && !OPENERS.has(firstWord(t));
   if (!capital) return true;
-  // A capital after the abbreviation usually starts a new sentence. These are
-  // the narrow exceptions.
-  if (standalone && word !== "no") return true; // "Sr. García", an abbreviation with nothing before it
-  const next = firstWord(t);
-  if (TIME_WORDS.has(word)) return TIME_ZONES.has(next); // "9 a.m. Eastern"
-  if (COUNTRY_WORDS.has(word)) return !OPENERS.has(next); // "the U.S. Department"
-  if (CORP_WORDS.has(word)) return CORP_TITLES.has(next); // "Acme Inc. CEO"
+  // A capital after the abbreviation starts a new sentence, except a time
+  // zone after a.m./p.m. ("9 a.m. ET").
+  if (TIME_WORDS.has(word)) return TIME_ZONES.has(/^[\p{L}]+/u.exec(t)?.[0] ?? "");
   return false;
 }
 
-// A single letter before the period: a name initial ("Dana M. Whitfield"), or
-// a word that ends the sentence ("plan B.").
+// The word just before index `end` in `text` (letters and marks), found by a
+// backward scan so a long run of letters is read once.
+function wordBefore(text: string, end: number): string {
+  let i = end;
+  while (i > 0 && /\s/u.test(text[i - 1])) i--;
+  const stop = i;
+  while (i > 0 && /[\p{L}\p{M}]/u.test(text[i - 1])) i--;
+  return text.slice(i, stop);
+}
+
+// A single letter before the period. 0.2.1 always joined it to the next
+// fragment (a name initial: "Dana M. Whitfield", "according to J. Smith").
+// It now ends the sentence only on positive evidence: a marker follows (and
+// the text after it is not lower case), lower case follows ("plan B.
+// independent..."), the word before is a label noun ("plan B.", "Section
+// A."), or the next word is a sentence opener ("Plan B. The vendor...").
 function singleLetterFuses(core: string, letterIndex: number, lead: Lead): boolean {
   if (lead.markerLed) return startsLower(lead.text);
   const t = lead.text;
   if (/^\p{Lu}\.(?:\s|$)/u.test(t)) return true; // another initial follows: "J. R. R."
   // A lower-case letter before a number is a reference: "p. 4", "n. 12", "c. 1900".
-  if (/^\p{Ll}$/u.test(core[letterIndex]) && /^\p{N}/u.test(t)) return true;
-  if (!/^\p{Lu}/u.test(t)) return false; // lower case, a digit or punctuation: a new sentence
-  if (!/^\p{Lu}$/u.test(core[letterIndex])) return false;
-  const before = core.slice(0, letterIndex).trimEnd();
-  const prev = /[\p{L}\p{M}]+$/u.exec(before);
-  if (prev === null) return false;
-  const prevWord = prev[0];
-  if (!/^\p{Lu}\p{Ll}/u.test(prevWord)) return false; // "hired J." or "NASA B."
-  if (LABEL_NOUNS.has(prevWord.toLowerCase())) return false; // "Plan B."
-  return !OPENERS.has(firstWord(t)); // "Dana M. The ..." is a new sentence
+  if (/^\p{N}/u.test(t)) return /^\p{Ll}$/u.test(core[letterIndex]);
+  if (/^\p{Ll}/u.test(t) && !/^\p{Ll}+\p{Lu}/u.test(t)) return false;
+  if (!/^[\p{Lu}\p{Ll}]/u.test(t)) return true; // punctuation or another script: as in 0.2.1
+  if (LABEL_NOUNS.has(wordBefore(core, letterIndex).toLowerCase())) return false;
+  return !OPENERS.has(firstWord(t));
 }
 
 // Whether a fragment ending in a period does NOT end the sentence. `core` is
@@ -540,7 +580,7 @@ function endsOnFalseBoundary(core: string, lead: Lead, resolved: ResolvedSplitte
       if (resolved.alwaysFuse.has(word)) return lead.markerLed ? startsLower(lead.text) : true;
       if (resolved.contextFuse.has(word)) {
         const standalone = core.trimStart().length === trailing.length + 1;
-        return contextFuses(word, standalone, lead);
+        return contextFuses(word, trailing, standalone, lead);
       }
     }
   }
@@ -653,14 +693,16 @@ type LineKind =
   | "quote"
   | "paragraph";
 
-const FENCE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+// A fence line: three or more backticks or tildes, then an info string. A
+// backtick fence's info string cannot contain a backtick, so inline code at
+// the start of a line ("```npm i``` installs it") is not a fence.
+const FENCE = /^[ \t]{0,3}(?:(`{3,})([^`]*)|(~{3,})(.*))$/;
 const RULE = /^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const TABLE_ROW = /^[ \t]*\|.*\|[ \t]*$/;
 const HEADING = /^[ \t]{0,3}#{1,6}(?:[ \t]|$)/;
 const LIST_START =
   /^[ \t]*(?:[-*+•]|\d{1,3}[.)]|[A-Za-z][.)]|[IVXLCDM]{1,6}\.|\([A-Za-z0-9]{1,3}\))[ \t]+\S/;
 const QUOTE = /^[ \t]*>/;
-const EMPHASIS_LINE = /^[ \t]*(\*\*|__|\*(?=\S)|_(?=\S))(.+?)\1[ \t]*:?[ \t]*$/;
 
 function lineKind(line: string): LineKind {
   if (BLANK.test(line)) return "blank";
@@ -674,154 +716,240 @@ function lineKind(line: string): LineKind {
   return "paragraph";
 }
 
-// Ends like a statement: a terminator other than a question mark, possibly
-// followed by closers.
-function endsLikeStatement(text: string): boolean {
+// A fence line's character, run length and whether it is bare (nothing after
+// the run but spaces), or null when it is not a fence line.
+function fenceInfo(line: string): { char: string; length: number; bare: boolean } | null {
+  const m = FENCE.exec(line);
+  if (m === null) return null;
+  const run = m[1] ?? m[3];
+  const info = m[2] ?? m[4];
+  return { char: run[0], length: run.length, bare: info.trim() === "" };
+}
+
+// Whether a line (trimmed) is only a list label: "1.", "2)", "IV.", "Step 3.".
+function isLoneLabel(line: string): boolean {
+  return LABEL_ONLY.test(line.trim());
+}
+
+// Whether `text` contains a sentence terminator other than one final question
+// mark. Used to decide that a heading, label or lead-in holds a statement.
+function holdsStatement(text: string): boolean {
   const { core } = stripClosers(text.trimEnd());
-  const last = core[core.length - 1] ?? "";
-  return TERMINATOR_CLASS.test(last) && last !== "?" && last !== "？" && last !== "؟" && last !== "⁇";
+  for (let i = 0; i < core.length; i++) {
+    if (!TERMINATOR_CLASS.test(core[i])) continue;
+    const isFinalQuestion = i === core.length - 1 && "?？؟⁇".includes(core[i]);
+    if (!isFinalQuestion) return true;
+  }
+  return false;
 }
 
 function carriesCitation(text: string, resolved: ResolvedSplitter): boolean {
   return hasMarker(text, resolved) || hasPlaceholder(text, resolved);
 }
 
-// A heading is a label unless it carries a marker or placeholder or ends
-// like a statement ("## Prices doubled in 2025.").
+// A heading's text without its opening hashes and optional closing hashes,
+// found by scanning (an unanchored suffix regex was quadratic on long runs of
+// spaces).
+function headingText(line: string): string {
+  let start = 0;
+  while (start < line.length && (line[start] === " " || line[start] === "\t")) start++;
+  while (start < line.length && line[start] === "#") start++;
+  let end = line.length;
+  while (end > start && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  let hashes = end;
+  while (hashes > start && line[hashes - 1] === "#") hashes--;
+  if (hashes < end && (hashes === start || line[hashes - 1] === " " || line[hashes - 1] === "\t")) end = hashes;
+  return line.slice(start, end);
+}
+
+// markdown: true only. A heading is a label unless it carries a marker or
+// placeholder or holds a statement ("## Prices doubled in 2025.", "## Yes. It
+// works").
 function headingIsClaim(line: string, resolved: ResolvedSplitter): boolean {
-  const text = line.replace(/^[ \t]{0,3}#{1,6}/, "").replace(/[ \t]+#+[ \t]*$/, "");
-  return carriesCitation(text, resolved) || endsLikeStatement(text);
+  const text = headingText(line);
+  return carriesCitation(text, resolved) || holdsStatement(text);
 }
 
-// A short emphasized line ("**Summary**", "**Battery:**") is a label unless
-// it carries a marker or placeholder, ends like a statement, or runs past six
-// words.
+// markdown: true only. A line that is one emphasized phrase ("**Summary**",
+// "**Battery:**", "*Note*") of six words or fewer, holding no statement,
+// marker or placeholder. The phrase may not contain its own delimiter, so
+// "**Battery:** lasts **40 hours**" is not a label.
 function isEmphasisLabel(line: string, resolved: ResolvedSplitter): boolean {
-  const m = EMPHASIS_LINE.exec(line);
-  if (m === null) return false;
-  const inner = m[2].trim();
-  if (inner === "" || carriesCitation(inner, resolved) || endsLikeStatement(inner)) return false;
-  return inner.split(/\s+/).length <= 6;
+  let text = line.trim();
+  if (text.endsWith(":")) text = text.slice(0, -1).trimEnd();
+  for (const delim of ["**", "__", "*", "_"]) {
+    if (text.length <= delim.length * 2 || !text.startsWith(delim) || !text.endsWith(delim)) continue;
+    const inner = text.slice(delim.length, text.length - delim.length);
+    if (inner.includes(delim[0]) || /^\s/u.test(inner) || /\s$/u.test(inner)) return false;
+    if (carriesCitation(inner, resolved) || holdsStatement(inner)) return false;
+    return inner.trim().split(/\s+/).length <= 6;
+  }
+  return false;
 }
 
-// A short line ending in a colon that introduces a list, table or code block
-// ("Here is what the policy says:") is a lead-in, not a claim, unless it
-// carries a marker or placeholder or runs past ten words.
+// markdown: true only. A short line ending in a colon, holding no other
+// terminator, that introduces a list, table or code block ("Here is what the
+// policy says:").
 function isLeadIn(line: string, nextKind: LineKind | undefined, resolved: ResolvedSplitter): boolean {
   if (nextKind !== "listStart" && nextKind !== "tableRow" && nextKind !== "fence") return false;
   const text = line.trim();
   if (!/[:：]$/u.test(text) || carriesCitation(text, resolved)) return false;
+  if (holdsStatement(text.slice(0, -1))) return false;
   return text.split(/\s+/).length <= 10;
 }
 
-// Whether `next` continues the sentence that `prev` (a wrapped line) left
-// open: it starts in lower case, or `prev` ends with a comma or a word such
-// as "the", "of" or "and".
-function continuesLine(prev: string, next: string): boolean {
+// markdown: true only. Whether `next` continues the sentence that `prevLine`
+// (one wrapped line, not the whole block) left open: it starts in lower case,
+// or the line before ends with a comma or a word such as "the", "of" or "and".
+function continuesLine(prevLine: string, next: string): boolean {
   const text = next.trimStart();
-  if (startsLower(text) || /^\p{Ll}/u.test(text)) return true;
+  if (/^\p{Ll}/u.test(text)) return true;
   if (!/^[\p{L}\p{N}]/u.test(text)) return false;
-  const end = prev.trimEnd();
-  if (end.endsWith(",")) return true;
-  const word = /[\p{L}]+$/u.exec(end);
-  return word !== null && CONNECTORS.has(word[0].toLowerCase());
+  let end = prevLine.length;
+  while (end > 0 && /\s/u.test(prevLine[end - 1])) end--;
+  if (prevLine[end - 1] === ",") return true;
+  let start = end;
+  while (start > 0 && /\p{L}/u.test(prevLine[start - 1])) start--;
+  return start < end && CONNECTORS.has(prevLine.slice(start, end).toLowerCase());
+}
+
+// Lines that are always scaffolding, whatever `markdown` says: they hold no
+// letters or digits that could be a claim (a rule, a table separator row, a
+// bare fence line) or only a list numeral ("1.").
+function isAlwaysScaffolding(line: string, kind: LineKind): boolean {
+  if (kind === "rule" || kind === "tableSeparator") return true;
+  if (kind === "fence") return fenceInfo(line)?.bare === true;
+  return isLoneLabel(line);
 }
 
 /**
- * Turn lines into text blocks for the sentence splitter, setting markdown
- * scaffolding aside as non-claims and joining hard-wrapped lines.
+ * Turn lines into text blocks for the sentence splitter. Lines that hold no
+ * claim are always set aside. With `markdown: true`, headings, labels,
+ * lead-ins, table header rows and fenced code are set aside too, and
+ * hard-wrapped lines are joined.
  */
 function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: string[]): string[] {
-  const lines = text.replace(LINE_BREAKS, "\n").split("\n");
-  if (!resolved.markdown) return lines;
+  // Default: lines end at "\n" only (a "\r\n" ending works too), as in 0.2.1.
+  // A lone "\r" or U+2028/U+2029 also ends a line only with markdown: true,
+  // because splitting there by default could turn an honest document that
+  // 0.2.1 passed into a failing one.
+  const lines = (resolved.markdown ? text.replace(LINE_BREAKS, "\n") : text).split("\n");
   const kinds = lines.map(lineKind);
-  // Pair fences in order; an unclosed fence hides nothing.
-  const inFence = new Uint8Array(lines.length);
-  let open = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (kinds[i] !== "fence") continue;
-    if (open < 0) open = i;
-    else {
-      inFence.fill(1, open, i + 1);
-      open = -1;
+  if (!resolved.markdown) {
+    const blocks: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (kinds[i] !== "blank" && isAlwaysScaffolding(lines[i], kinds[i])) nonClaims.push(lines[i].trim());
+      else blocks.push(lines[i]);
     }
+    return blocks;
+  }
+
+  // Fenced code: an opener needs a later bare closer of the same character
+  // and at least the same length; otherwise it fences nothing. The longest
+  // bare closer after each line is precomputed so pairing stays linear.
+  const fences = lines.map(fenceInfo);
+  const longestAfter = { "`": new Int32Array(lines.length + 1), "~": new Int32Array(lines.length + 1) };
+  for (let i = lines.length - 1; i >= 0; i--) {
+    longestAfter["`"][i] = longestAfter["`"][i + 1];
+    longestAfter["~"][i] = longestAfter["~"][i + 1];
+    const f = fences[i];
+    if (f !== null && f.bare) {
+      const table = longestAfter[f.char as "`" | "~"];
+      table[i] = Math.max(table[i], f.length);
+    }
+  }
+  const inFence = new Uint8Array(lines.length);
+  const fenceBlocks = new Map<number, string>();
+  for (let i = 0; i < lines.length; i++) {
+    const f = fences[i];
+    if (f === null || longestAfter[f.char as "`" | "~"][i + 1] < f.length) continue;
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const c = fences[j];
+      if (c !== null && c.bare && c.char === f.char && c.length >= f.length) break;
+    }
+    inFence.fill(1, i, j + 1);
+    fenceBlocks.set(i, lines.slice(i, j + 1).join("\n"));
+    i = j;
   }
 
   const blocks: string[] = [];
   let current: string | null = null;
+  let currentLastLine = "";
   let currentKind: LineKind | null = null;
   const flush = () => {
     if (current !== null) blocks.push(current);
     current = null;
     currentKind = null;
   };
-  let fenceStart = -1;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const kind = kinds[i];
     if (inFence[i] === 1) {
       flush();
-      if (fenceStart < 0) fenceStart = i;
-      if (i + 1 >= lines.length || inFence[i + 1] === 0 || (kinds[i] === "fence" && i > fenceStart)) {
-        nonClaims.push(lines.slice(fenceStart, i + 1).join("\n"));
-        fenceStart = -1;
-      }
+      const block = fenceBlocks.get(i);
+      if (block !== undefined) nonClaims.push(block);
       continue;
     }
-    switch (kind) {
-      case "blank":
-        flush();
-        break;
-      case "fence":
-      case "rule":
-      case "tableSeparator":
-        flush();
+    const line = lines[i];
+    const kind = kinds[i];
+    if (kind === "blank") {
+      flush();
+      continue;
+    }
+    if (isAlwaysScaffolding(line, kind)) {
+      flush();
+      nonClaims.push(line.trim());
+      continue;
+    }
+    if (kind === "fence" || kind === "tableRow") {
+      // An unpaired fence line with an info string, or a table row: a claim
+      // of its own. A table's header (its first row, right above a
+      // separator) is set aside unless it carries a citation or a statement.
+      flush();
+      const header =
+        kind === "tableRow" &&
+        kinds[i + 1] === "tableSeparator" &&
+        inFence[i + 1] === 0 &&
+        (i === 0 || kinds[i - 1] !== "tableRow");
+      if (header && !carriesCitation(line, resolved) && !holdsStatement(line.replace(/\|/g, " "))) {
         nonClaims.push(line.trim());
-        break;
-      case "tableRow": {
-        flush();
-        const header = kinds[i + 1] === "tableSeparator" && inFence[i + 1] === 0;
-        if (header && !carriesCitation(line, resolved)) nonClaims.push(line.trim());
-        else blocks.push(line);
-        break;
-      }
-      case "heading":
-        flush();
-        if (headingIsClaim(line, resolved)) blocks.push(line);
-        else nonClaims.push(line.trim());
-        break;
-      default: {
-        let nextKind: LineKind | undefined;
-        for (let k = i + 1; k < lines.length; k++) {
-          if (kinds[k] !== "blank") {
-            nextKind = kinds[k];
-            break;
-          }
-        }
-        if (
-          isEmphasisLabel(line, resolved) ||
-          (kind === "paragraph" && current === null && isLeadIn(line, nextKind, resolved))
-        ) {
-          flush();
-          nonClaims.push(line.trim());
+      } else blocks.push(line);
+      continue;
+    }
+    if (kind === "heading") {
+      flush();
+      if (headingIsClaim(line, resolved)) blocks.push(line);
+      else nonClaims.push(line.trim());
+      continue;
+    }
+    let nextKind: LineKind | undefined;
+    if (/[:：]\s*$/u.test(line)) {
+      for (let k = i + 1; k < lines.length; k++) {
+        if (kinds[k] !== "blank") {
+          nextKind = kinds[k];
           break;
-        }
-        const joinable =
-          current !== null &&
-          (kind === "paragraph" || (kind === "quote" && currentKind === "quote")) &&
-          continuesLine(
-            current,
-            kind === "quote" ? line.replace(QUOTE, "") : line,
-          );
-        if (joinable) {
-          current = `${current as string} ${line.trim()}`;
-        } else {
-          flush();
-          current = line;
-          currentKind = kind;
         }
       }
     }
+    if (
+      isEmphasisLabel(line, resolved) ||
+      (kind === "paragraph" && current === null && isLeadIn(line, nextKind, resolved))
+    ) {
+      flush();
+      nonClaims.push(line.trim());
+      continue;
+    }
+    const joinable =
+      current !== null &&
+      (kind === "paragraph" || (kind === "quote" && currentKind === "quote")) &&
+      continuesLine(currentLastLine, kind === "quote" ? line.replace(QUOTE, "") : line);
+    if (joinable) {
+      current = `${current as string} ${line.trim()}`;
+    } else {
+      flush();
+      current = line;
+      currentKind = kind;
+    }
+    currentLastLine = line;
   }
   flush();
   return blocks;
@@ -889,8 +1017,8 @@ const HTML_ENTITY_BEFORE = /&(?:[A-Za-z][A-Za-z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9A
 
 // Split ONE sentence into clause-level grounding units on ';', an em-dash, or
 // (only when the clause before it already carries a citation) a colon or a
-// dash separator ("–", "--", " - "). Bracket- and parenthesis-aware via
-// MATCHED-pair tracking: a separator inside a real `[ ... ]` or `( ... )` span
+// dash separator ("–", "--", " - "). Bracket-aware via MATCHED-pair
+// tracking: a separator inside a real `[ ... ]` span
 // (or inside whatever the marker/placeholder patterns match, even if they
 // don't use brackets) is never a split point — but an UNbalanced bracket
 // cannot suppress later splits, so bracket handling fails CLOSED rather than
@@ -904,18 +1032,12 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
   // is; repainting every position of every matched pair was quadratic on
   // "[[[...x...]]]".
   const cover = new Int32Array(n + 1);
-  const squareStack: number[] = [];
-  const roundStack: number[] = [];
+  const openStack: number[] = [];
   for (let i = 0; i < n; i++) {
-    const c = sentence[i];
-    if (c === "[") squareStack.push(i);
-    else if (c === "(" || c === "（") roundStack.push(i);
-    else if (c === "]" && squareStack.length > 0) {
-      const open = squareStack.pop()!;
-      cover[open] += 1;
-      cover[i + 1] -= 1;
-    } else if ((c === ")" || c === "）") && roundStack.length > 0) {
-      const open = roundStack.pop()!;
+    if (sentence[i] === "[") {
+      openStack.push(i);
+    } else if (sentence[i] === "]" && openStack.length > 0) {
+      const open = openStack.pop()!;
       cover[open] += 1;
       cover[i + 1] -= 1;
     }
