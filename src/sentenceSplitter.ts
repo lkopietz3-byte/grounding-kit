@@ -13,6 +13,7 @@
 
 import { GroundingConfigError } from "./errors.js";
 import {
+  assertKnownKeys,
   assertPlainObject,
   assertString,
   describe,
@@ -22,17 +23,20 @@ import {
 /** Controls which trailing periods do NOT end a sentence. */
 export interface AbbreviationConfig {
   /**
-   * Abbreviations that ALWAYS attach to the token that follows them, so a
-   * period after one of these can never end a sentence (e.g. honorifics:
-   * "Dr. Vance" must not split into "Dr." + "Vance").
+   * Abbreviations that attach to the token that follows them, so a period
+   * after one of these does not end a sentence (e.g. honorifics: "Dr. Vance"
+   * must not split into "Dr." + "Vance"). One exception: when a citation
+   * marker or placeholder follows the period, the period ends the sentence
+   * unless the text after the marker continues in lower case.
    */
   alwaysFuse: readonly string[];
   /**
    * Abbreviations that CAN legitimately end a sentence (list-enders, unit
-   * suffixes). They only fuse with what follows when the next fragment
-   * continues in lower-case or a digit ("Corp. filed the report" ends the
-   * sentence; "Corp. reserves the right" does not, but "no. 2 on the list"
-   * does not end at "no.").
+   * suffixes). They fuse with what follows when the next fragment does not
+   * start with a capital letter ("Corp. filed the report" ends the sentence;
+   * "Corp. reserves the right" does not, and "no. 2 on the list" does not end
+   * at "no."). A few known words also fuse before a capital in a narrow
+   * context; see the README section "Abbreviations".
    */
   contextFuse: readonly string[];
 }
@@ -46,18 +50,23 @@ export interface AbbreviationConfig {
 export const DEFAULT_ABBREVIATIONS: AbbreviationConfig = Object.freeze({
   alwaysFuse: Object.freeze([
     "mr", "mrs", "ms", "dr", "prof", "hon", "st", "v", "vs",
+    // Titles before a name, and Latin abbreviations that always introduce
+    // more text ("e.g. Apple", "i.e. IP68").
+    "gov", "sen", "mt", "lt", "sgt", "capt", "rev", "messrs",
+    "eg", "ie", "cf", "viz",
   ]),
   contextFuse: Object.freeze([
-    "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
-    "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
+    "no", "inc", "co", "corp", "ltd", "llc", "plc", "dept", "vol", "ed",
+    "al", "etc", "approx", "est", "ca", "fig", "p", "pp", "jr", "sr",
+    "phd", "md",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
     // "am"/"pm"/"us" belong here, never in alwaysFuse: they are common
     // English WORDS ("I am.", "They told us.") as often as they are
-    // abbreviations ("9 a.m.", "the U.S."), and only contextFuse's
-    // next-fragment check (capitalized = real sentence end, lower-case/digit
-    // = continues) tells the two apart. alwaysFuse has no such check, so it
-    // would unconditionally fuse "I am." into whatever follows it, silently
-    // swallowing a real sentence end.
-    "am", "pm", "us",
+    // abbreviations ("9 a.m.", "the U.S."). They only count as abbreviations
+    // when written with an inner period ("a.m.", "U.S."), and only
+    // contextFuse's next-fragment check then decides whether they end the
+    // sentence.
+    "am", "pm", "us", "uk", "eu",
   ]),
 });
 
@@ -73,7 +82,10 @@ export const DEFAULT_ABBREVIATIONS: AbbreviationConfig = Object.freeze({
  * one is found, because a marker that occupies no text cannot be attached to
  * or removed from anything and would stall the scan.
  *
- * Default convention: `[[cite:id]]`. Bring your own for e.g. `[1]`,
+ * Default convention: `[[cite:id]]`, where the id is one or more of
+ * `a-z A-Z 0-9 _ -`. Anything else between the brackets (a space inside the
+ * id, a dot, a comma-separated list) is not a marker: the text stays as
+ * prose and grounds nothing. Bring your own pattern for e.g. `[1]`,
  * `{{ref:id}}`, or whatever your generator already emits.
  */
 export const DEFAULT_MARKER_PATTERN = /\[\[cite:\s*([a-zA-Z0-9_-]+)\s*\]\]/g;
@@ -82,19 +94,21 @@ export const DEFAULT_MARKER_PATTERN = /\[\[cite:\s*([a-zA-Z0-9_-]+)\s*\]\]/g;
  * Regex matching an explicit "I don't have a source for this" placeholder —
  * the honest alternative to inventing a citation. Default recognizes a few
  * common bracketed conventions ("[citation needed]", "[TK]"), with up to 200
- * characters of note before the closing bracket. The 200-character cap keeps
- * a long run of unclosed "[TK" from making the scan quadratic; a longer note
- * is not recognized as a placeholder, so that sentence is classified by its
- * citations instead (fail closed). Bring your own to match whatever
- * gap-marker your prompt asks the model to emit.
+ * characters of note before the closing bracket. Each keyword must end at a
+ * word boundary, so "[Tkachenko 2019]" or "[TKO Group]" are not placeholders.
+ * The 200-character cap keeps a long run of unclosed "[TK" from making the
+ * scan quadratic; a longer note is not recognized as a placeholder, so that
+ * sentence is classified by its citations instead (fail closed). Bring your
+ * own to match whatever gap-marker your prompt asks the model to emit.
  */
 export const DEFAULT_PLACEHOLDER_PATTERN =
-  /\[(?:citation needed|more research needed|TK)[^\]]{0,200}\]/i;
+  /\[(?:citation needed|more research needed|TK)\b[^\]]{0,200}\]/i;
 
 /**
  * Options for `splitSentences` (and, via `ClassifyConfig`, for
  * `classifySentence`/`classifyDocument`). Every field is optional; an
- * omitted field falls back to its `DEFAULT_*` export.
+ * omitted field falls back to its `DEFAULT_*` export. An unknown key throws
+ * a `TypeError`, so a typo cannot silently fall back to a default.
  */
 export interface SplitterConfig {
   /** Replaces `DEFAULT_ABBREVIATIONS` entirely (does not merge with it). */
@@ -103,17 +117,99 @@ export interface SplitterConfig {
   markerPattern?: RegExp;
   /** Replaces `DEFAULT_PLACEHOLDER_PATTERN`. */
   placeholderPattern?: RegExp;
+  /**
+   * `true` (default): markdown scaffolding is not a claim. Headings that do
+   * not end like a sentence, horizontal rules, table header and separator
+   * rows, short bold labels, fenced code blocks and lone list numerals are
+   * skipped, and a hard-wrapped line that continues a sentence is joined to
+   * it. A heading, label or table header that carries a citation marker or
+   * placeholder, or that ends like a sentence, is still checked as a claim.
+   * `false`: every line is plain text, as in 0.2.1 and earlier.
+   */
+  markdown?: boolean;
 }
 
-const TERMINATOR_CLASS = /[.!?。．！？]/;
+// Sentence terminators. ASCII-style ones need whitespace after them to end a
+// sentence; the CJK full stops below also end one with no space after them.
+const TERMINATORS = ".!?…‼⁇⁈⁉।॥؟۔。．！？";
+// Characters that can close a sentence after its terminator: quotes,
+// brackets, markdown emphasis, CJK closing brackets, footnote superscripts.
+const CLOSERS = "\"'”’»)\\]}*_」』）¹²³⁰⁴⁵⁶⁷⁸⁹†‡";
+const TERMINATOR_CLASS = new RegExp(`[${TERMINATORS}]`, "u");
+const CLOSER_CLASS = new RegExp(`[${CLOSERS}]`, "u");
+// Split after a terminator (plus up to three closers) followed by whitespace,
+// and after a CJK full stop followed directly by text. The closer run is
+// bounded so the lookbehind stays O(1) per position.
+const SENTENCE_BOUNDARY = new RegExp(
+  `(?<=[${TERMINATORS}][${CLOSERS}]{0,3})\\s+|(?<=[。．！？])(?=[^\\s${CLOSERS}])`,
+  "u",
+);
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 // Whitespace plus characters a renderer draws as nothing (zero-width space and
 // joiners, word joiner, soft hyphen, every bidi control, variation selectors,
 // Hangul fillers, ...). `\s` alone misses them, so text that LOOKS like
 // "period, space, marker" could hide its boundary behind one.
-const INVISIBLE_LEAD = /^[\s\p{Default_Ignorable_Code_Point}]*/u;
+const INVISIBLE_RUN = /[\s\p{Default_Ignorable_Code_Point}]*/uy;
 const BLANK = /^[\p{White_Space}\p{Default_Ignorable_Code_Point}\p{Cc}]*$/u;
-const TERMINATOR_THEN_INVISIBLE = /([.!?。．！？])(?=\p{Default_Ignorable_Code_Point})/gu;
+const TERMINATOR_THEN_INVISIBLE = new RegExp(
+  `([${TERMINATORS}][${CLOSERS}]{0,3})(?=\\p{Default_Ignorable_Code_Point})`,
+  "gu",
+);
+const LINE_BREAKS = /\r\n?|[\u2028\u2029]/g;
+
+// A fragment that is only a list label: "1.", "2)", "IV.", "B.", "Step 1.".
+// It carries no claim, so it joins the text after it instead of becoming a
+// phantom "uncited claim" of its own.
+const LABEL_ONLY =
+  /^(?:(?:step|part|chapter|section|phase|stage|option|item|tip|rule|question|appendix|q)\s+)?(?:\d{1,3}|(?=[ivxlcdm])m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})|\p{L})[.)]$/iu;
+
+// Words that start sentences. A capitalized next word from this list means a
+// new sentence, not the rest of a name or title after an abbreviation.
+const OPENERS = new Set([
+  "the", "a", "an", "this", "that", "these", "those", "it", "its", "we", "they",
+  "he", "she", "i", "you", "our", "their", "his", "her", "my", "your", "there",
+  "here", "in", "on", "at", "for", "but", "and", "or", "so", "however", "also",
+  "as", "if", "when", "after", "before", "while", "with", "by", "to", "from",
+  "of", "then", "now", "today", "meanwhile", "overall", "finally", "first",
+  "next", "still", "yet", "although", "because", "since", "each", "every",
+  "all", "some", "many", "most", "both", "such", "what", "which", "who", "how",
+  "why", "where", "no", "not", "one", "two", "three",
+]);
+// Narrow capitalized continuations for a few known contextFuse words.
+const TIME_WORDS = new Set(["am", "pm"]);
+const TIME_ZONES = new Set([
+  "et", "est", "edt", "ct", "cst", "cdt", "mt", "mst", "mdt", "pt", "pst", "pdt",
+  "utc", "gmt", "bst", "cet", "cest", "ist", "jst", "aest", "eastern", "central",
+  "mountain", "pacific", "local",
+]);
+const COUNTRY_WORDS = new Set(["us", "uk", "eu"]);
+const CORP_WORDS = new Set(["inc", "co", "corp", "ltd", "llc", "plc"]);
+const CORP_TITLES = new Set([
+  "ceo", "cfo", "coo", "cto", "chief", "president", "chairman", "chairwoman",
+  "chair", "founder", "spokesperson", "spokesman", "spokeswoman",
+]);
+// Common English words that only count as abbreviations in dotted form.
+const DOTTED_ONLY = new Set(["am", "pm", "us"]);
+// A capitalized word before a single letter that names a thing, not a person:
+// "Plan B." and "Section A." can end a sentence; "Dana M." cannot.
+const LABEL_NOUNS = new Set([
+  "plan", "option", "section", "part", "appendix", "exhibit", "schedule",
+  "table", "figure", "group", "type", "class", "grade", "level", "tier",
+  "phase", "stage", "step", "item", "unit", "building", "block", "row",
+  "column", "vitamin", "model", "version", "category", "zone", "area", "team",
+  "round", "box", "hall", "wing", "gate", "terminal", "track", "room", "lab",
+  "site", "wave", "series", "size", "chapter", "lot", "batch", "case", "test",
+]);
+// Words that, ending a hard-wrapped line, show the sentence continues on the
+// next line even if that line starts with a capital.
+const CONNECTORS = new Set([
+  "a", "an", "the", "of", "to", "in", "on", "at", "by", "for", "from", "with",
+  "and", "or", "but", "nor", "as", "that", "which", "who", "whose", "whom",
+  "is", "are", "was", "were", "be", "been", "being", "has", "have", "had",
+  "than", "into", "onto", "over", "under", "about", "per", "via", "its",
+  "their", "our", "his", "her", "this", "these", "those", "between", "among",
+  "during", "because", "if", "when", "where", "whether",
+]);
 
 // --- regex hygiene -----------------------------------------------------
 // Every scan below runs on a private copy of the caller's regex, built ONCE
@@ -121,7 +217,8 @@ const TERMINATOR_THEN_INVISIBLE = /([.!?。．！？])(?=\p{Default_Ignorable_Co
 // one only matches at lastIndex, so sharing the caller's object (or keeping
 // its `y` flag) is a source of "works on the first document, silently breaks
 // on the second" bugs, and of a sticky marker that never sees a citation past
-// the start of the text. The copy is always global and never sticky.
+// the start of the text. The scanning copy is always global and never sticky;
+// a second, sticky copy is used only to ask "is there a marker exactly here?".
 // The kit reads `source` and `flags` through the RegExp.prototype getters,
 // which throw for anything that is not a real RegExp (from any realm).
 
@@ -151,6 +248,12 @@ function globalCopy(value: unknown, label: string): RegExp {
   return new RegExp(source, `${flags.replace(/[gy]/g, "")}g`);
 }
 
+function zeroLengthMarker(index: number): GroundingConfigError {
+  return new GroundingConfigError(
+    `markerPattern matched zero characters at index ${String(index)}; a marker must match at least one character.`,
+  );
+}
+
 /**
  * Every match of `re` (a private global copy) in `text`, in order. Throws
  * `GroundingConfigError` on the first zero-length match, so a marker pattern
@@ -164,33 +267,28 @@ function scanMarkers(text: string, re: RegExp): RegExpExecArray[] {
     if (m === null) return matches;
     if (m[0].length === 0) {
       re.lastIndex = 0;
-      throw new GroundingConfigError(
-        `markerPattern matched zero characters at index ${String(m.index)}; a marker must match at least one character.`,
-      );
+      throw zeroLengthMarker(m.index);
     }
     matches.push(m);
   }
 }
 
-// `text` with the given (ordered, non-overlapping) matches cut out.
-function removeMatches(text: string, matches: readonly RegExpExecArray[]): string {
-  let out = "";
-  let last = 0;
-  for (const m of matches) {
-    out += text.slice(last, m.index);
-    last = m.index + m[0].length;
+// Every non-empty placeholder match, in order. A placeholder pattern that can
+// match nothing is not an error (it is only ever tested, never removed); its
+// empty matches are skipped.
+function scanPlaceholders(text: string, re: RegExp): RegExpExecArray[] {
+  const matches: RegExpExecArray[] = [];
+  re.lastIndex = 0;
+  for (;;) {
+    const m = re.exec(text);
+    if (m === null) return matches;
+    if (m[0].length === 0) {
+      re.lastIndex = m.index + 1;
+      if (re.lastIndex > text.length) return matches;
+      continue;
+    }
+    matches.push(m);
   }
-  return out + text.slice(last);
-}
-
-// The placeholder pattern is used two ways: a global copy to find every
-// placeholder while splitting, and a non-global, non-sticky copy for the
-// per-sentence `.test` (a global or sticky regex would carry `lastIndex`
-// from one sentence to the next).
-function placeholderCopies(value: unknown): { global: RegExp; plain: RegExp } {
-  const { source, flags } = copyPattern(value, "placeholderPattern");
-  const kept = flags.replace(/[gy]/g, "");
-  return { global: new RegExp(source, `${kept}g`), plain: new RegExp(source, kept) };
 }
 
 /** A splitter configuration read once and validated: private regex copies and dense, lower-cased word sets. */
@@ -198,8 +296,27 @@ export interface ResolvedSplitter {
   alwaysFuse: Set<string>;
   contextFuse: Set<string>;
   marker: RegExp;
+  markerSticky: RegExp;
   placeholderGlobal: RegExp;
+  placeholderSticky: RegExp;
   placeholderTest: RegExp;
+  markdown: boolean;
+}
+
+// An abbreviation entry is compared with the letters of the word before a
+// period, lower-cased, dots removed: "Dr.", "dr" and "D.R." are all "dr".
+function normalizeAbbreviations(list: string[], label: string): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < list.length; i++) {
+    const word = list[i].replace(/\./g, "").toLowerCase();
+    if (word !== "" && !/^[\p{Lu}\p{Ll}\p{Lt}\p{M}]+$/u.test(word)) {
+      throw new TypeError(
+        `${label}[${String(i)}] must be letters of a cased script (Latin, Greek, Cyrillic, ...), optionally with dots (got ${JSON.stringify(list[i])}); it could never match a word before a period.`,
+      );
+    }
+    out.add(word);
+  }
+  return out;
 }
 
 /**
@@ -211,180 +328,554 @@ export function resolveSplitter(options: {
   abbreviations: unknown;
   markerPattern: unknown;
   placeholderPattern: unknown;
+  markdown: unknown;
 }): ResolvedSplitter {
   const abbreviations = options.abbreviations ?? DEFAULT_ABBREVIATIONS;
   assertPlainObject(abbreviations, "abbreviations");
+  assertKnownKeys(abbreviations, ["alwaysFuse", "contextFuse"], "abbreviations");
   const alwaysFuse = readStringList(abbreviations.alwaysFuse, "abbreviations.alwaysFuse");
   const contextFuse = readStringList(abbreviations.contextFuse, "abbreviations.contextFuse");
   const markerPattern = options.markerPattern ?? DEFAULT_MARKER_PATTERN;
   const placeholderPattern = options.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
-  const placeholder = placeholderCopies(placeholderPattern);
+  const markdown = options.markdown ?? true;
+  if (typeof markdown !== "boolean") {
+    throw new TypeError(`config.markdown must be a boolean (got ${describe(markdown)}).`);
+  }
+  const marker = copyPattern(markerPattern, "markerPattern");
+  const placeholder = copyPattern(placeholderPattern, "placeholderPattern");
+  const markerFlags = marker.flags.replace(/[gy]/g, "");
+  const placeholderFlags = placeholder.flags.replace(/[gy]/g, "");
   return {
-    alwaysFuse: new Set(alwaysFuse.map((w) => w.toLowerCase())),
-    contextFuse: new Set(contextFuse.map((w) => w.toLowerCase())),
-    marker: globalCopy(markerPattern, "markerPattern"),
-    placeholderGlobal: placeholder.global,
-    placeholderTest: placeholder.plain,
+    alwaysFuse: normalizeAbbreviations(alwaysFuse, "abbreviations.alwaysFuse"),
+    contextFuse: normalizeAbbreviations(contextFuse, "abbreviations.contextFuse"),
+    marker: new RegExp(marker.source, `${markerFlags}g`),
+    markerSticky: new RegExp(marker.source, `${markerFlags}y`),
+    placeholderGlobal: new RegExp(placeholder.source, `${placeholderFlags}g`),
+    placeholderSticky: new RegExp(placeholder.source, `${placeholderFlags}y`),
+    placeholderTest: new RegExp(placeholder.source, placeholderFlags),
+    markdown,
+  };
+}
+
+const SPLITTER_KEYS = ["abbreviations", "markerPattern", "placeholderPattern", "markdown"] as const;
+
+/**
+ * @internal Read the splitter options from a validated plain `config`. The
+ * three original options are read unconditionally (once each); `markdown` is
+ * read only when it is an own property.
+ */
+export function readSplitterOptions(config: Record<string, unknown>): {
+  abbreviations: unknown;
+  markerPattern: unknown;
+  placeholderPattern: unknown;
+  markdown: unknown;
+} {
+  return {
+    abbreviations: config.abbreviations,
+    markerPattern: config.markerPattern,
+    placeholderPattern: config.placeholderPattern,
+    markdown: Object.hasOwn(config, "markdown") ? config.markdown : undefined,
   };
 }
 
 function resolveSplitterConfig(config: unknown): ResolvedSplitter {
   assertPlainObject(config, "config");
-  const source = config;
-  return resolveSplitter({
-    abbreviations: source.abbreviations,
-    markerPattern: source.markerPattern,
-    placeholderPattern: source.placeholderPattern,
-  });
+  // `supports` is accepted (and ignored) so one config object can be shared
+  // by splitSentences and classifyDocument.
+  assertKnownKeys(config, [...SPLITTER_KEYS, "supports"], "config");
+  return resolveSplitter(readSplitterOptions(config));
+}
+
+// --- per-position helpers ------------------------------------------------
+
+// Length of the match of a sticky regex at `pos`, or 0 when there is none.
+function stickyLength(re: RegExp, text: string, pos: number): number {
+  re.lastIndex = pos;
+  const m = re.exec(text);
+  re.lastIndex = 0;
+  return m === null ? 0 : m[0].length;
+}
+
+function invisibleRunEnd(text: string, pos: number): number {
+  return pos + stickyLength(INVISIBLE_RUN, text, pos);
+}
+
+// Length of a citation marker starting exactly at `pos`, or 0.
+function markerAt(text: string, pos: number, resolved: ResolvedSplitter): number {
+  resolved.markerSticky.lastIndex = pos;
+  const m = resolved.markerSticky.exec(text);
+  resolved.markerSticky.lastIndex = 0;
+  if (m === null) return 0;
+  if (m[0].length === 0) throw zeroLengthMarker(pos);
+  return m[0].length;
+}
+
+// Length of a placeholder starting exactly at `pos`, or 0.
+function placeholderAt(text: string, pos: number, resolved: ResolvedSplitter): number {
+  return stickyLength(resolved.placeholderSticky, text, pos);
+}
+
+function hasMarker(text: string, resolved: ResolvedSplitter): boolean {
+  return scanMarkers(text, resolved.marker).length > 0;
+}
+
+function hasPlaceholder(text: string, resolved: ResolvedSplitter): boolean {
+  resolved.placeholderTest.lastIndex = 0;
+  return resolved.placeholderTest.test(text);
+}
+
+// Whether `s` starts with a lower-case letter that is not the start of a
+// camel-case brand ("iPhone", "eBay" read as capitalized words).
+function startsLower(s: string): boolean {
+  return /^\p{Ll}/u.test(s) && !/^\p{Ll}+\p{Lu}/u.test(s);
+}
+
+function firstWord(s: string): string {
+  const m = /^[\p{L}\p{M}]+/u.exec(s);
+  return m === null ? "" : m[0].toLowerCase();
+}
+
+/**
+ * What the next fragment starts with: whether it opens with citation markers
+ * or placeholders (which belong to the sentence before them), and the text
+ * after them.
+ */
+interface Lead {
+  markerLed: boolean;
+  text: string;
+}
+
+function leadOf(next: string, resolved: ResolvedSplitter): Lead {
+  let pos = invisibleRunEnd(next, 0);
+  let markerLed = false;
+  for (;;) {
+    const len = markerAt(next, pos, resolved) || placeholderAt(next, pos, resolved);
+    if (len === 0) break;
+    markerLed = true;
+    pos = invisibleRunEnd(next, pos + len);
+  }
+  return { markerLed, text: next.slice(pos) };
+}
+
+// `trimmed` with up to four trailing closers removed, and whether any were.
+function stripClosers(trimmed: string): { core: string; hadClosers: boolean } {
+  let end = trimmed.length;
+  while (end > 0 && trimmed.length - end < 4 && CLOSER_CLASS.test(trimmed[end - 1])) end--;
+  return { core: trimmed.slice(0, end), hadClosers: end < trimmed.length };
+}
+
+// Letters an abbreviation can be written in: ASCII, plus any other cased
+// letter (Latin with accents, Greek, Cyrillic, ...) and combining marks.
+// Uncased scripts (CJK, Arabic, ...) are not, so "日本語p.m." still ends in
+// the word "p.m".
+const CASED_LETTER = /[\p{Lu}\p{Ll}\p{Lt}\p{M}]/u;
+
+function isLetterCode(c: number, ch: string): boolean {
+  if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) return true;
+  return c > 127 && CASED_LETTER.test(ch);
+}
+
+// The trailing word of a fragment that ends in ".": the run of letters and
+// dots immediately before the final period, starting at its first letter.
+// Found in one backward scan (a regex with an unbounded `*` here was
+// quadratic on input like "aaaa...a1.").
+function trailingWord(trimmed: string): string | null {
+  let first = -1;
+  for (let i = trimmed.length - 2; i >= 0; i--) {
+    const c = trimmed.charCodeAt(i);
+    if (isLetterCode(c, trimmed[i])) first = i;
+    else if (c !== 46) break;
+  }
+  return first < 0 ? null : trimmed.slice(first, trimmed.length - 1);
+}
+
+// The contextFuse decision for a known abbreviation followed by `lead`.
+function contextFuses(word: string, standalone: boolean, lead: Lead): boolean {
+  if (lead.markerLed) return startsLower(lead.text);
+  const t = lead.text;
+  if (t === "") return false;
+  const capital = /^\p{Lu}/u.test(t) || /^\p{Ll}+\p{Lu}/u.test(t);
+  if (!capital) return true;
+  // A capital after the abbreviation usually starts a new sentence. These are
+  // the narrow exceptions.
+  if (standalone && word !== "no") return true; // "Sr. García", an abbreviation with nothing before it
+  const next = firstWord(t);
+  if (TIME_WORDS.has(word)) return TIME_ZONES.has(next); // "9 a.m. Eastern"
+  if (COUNTRY_WORDS.has(word)) return !OPENERS.has(next); // "the U.S. Department"
+  if (CORP_WORDS.has(word)) return CORP_TITLES.has(next); // "Acme Inc. CEO"
+  return false;
+}
+
+// A single letter before the period: a name initial ("Dana M. Whitfield"), or
+// a word that ends the sentence ("plan B.").
+function singleLetterFuses(core: string, letterIndex: number, lead: Lead): boolean {
+  if (lead.markerLed) return startsLower(lead.text);
+  const t = lead.text;
+  if (/^\p{Lu}\.(?:\s|$)/u.test(t)) return true; // another initial follows: "J. R. R."
+  // A lower-case letter before a number is a reference: "p. 4", "n. 12", "c. 1900".
+  if (/^\p{Ll}$/u.test(core[letterIndex]) && /^\p{N}/u.test(t)) return true;
+  if (!/^\p{Lu}/u.test(t)) return false; // lower case, a digit or punctuation: a new sentence
+  if (!/^\p{Lu}$/u.test(core[letterIndex])) return false;
+  const before = core.slice(0, letterIndex).trimEnd();
+  const prev = /[\p{L}\p{M}]+$/u.exec(before);
+  if (prev === null) return false;
+  const prevWord = prev[0];
+  if (!/^\p{Lu}\p{Ll}/u.test(prevWord)) return false; // "hired J." or "NASA B."
+  if (LABEL_NOUNS.has(prevWord.toLowerCase())) return false; // "Plan B."
+  return !OPENERS.has(firstWord(t)); // "Dana M. The ..." is a new sentence
+}
+
+// Whether a fragment ending in a period does NOT end the sentence. `core` is
+// the trimmed fragment without trailing closers.
+function endsOnFalseBoundary(core: string, lead: Lead, resolved: ResolvedSplitter): boolean {
+  // Abbreviation fusion is a period-only concept and never applies to "!",
+  // "?", or a non-ASCII terminator. Bailing out here is also a required
+  // performance guard.
+  if (!core.endsWith(".")) return false;
+  const trailing = trailingWord(core);
+  if (trailing !== null) {
+    const word = trailing.replace(/\./g, "").toLowerCase();
+    const dotted = trailing.includes(".");
+    if (!(DOTTED_ONLY.has(word) && !dotted)) {
+      if (resolved.alwaysFuse.has(word)) return lead.markerLed ? startsLower(lead.text) : true;
+      if (resolved.contextFuse.has(word)) {
+        const standalone = core.trimStart().length === trailing.length + 1;
+        return contextFuses(word, standalone, lead);
+      }
+    }
+  }
+  const single = /(?:^|[\s(["'“‘])(\p{L})\.$/u.exec(core);
+  if (single !== null) return singleLetterFuses(core, core.length - 2, lead);
+  return false;
+}
+
+// Whether the boundary between `fragment` and `next` is false (the two
+// belong to one sentence).
+function fusesWithNext(fragment: string, next: string, resolved: ResolvedSplitter): boolean {
+  const trimmed = fragment.trim();
+  const lead = leadOf(next, resolved);
+  // A lone list label joins the text it labels.
+  if (LABEL_ONLY.test(trimmed)) return !lead.markerLed || startsLower(lead.text);
+  const { core, hadClosers } = stripClosers(trimmed);
+  // A quote or bracket closing after a terminator, followed by lower-case
+  // text, is dialogue or an aside that continues: `"Is it ready?" she asked.`
+  if (
+    hadClosers &&
+    !lead.markerLed &&
+    TERMINATOR_CLASS.test(core[core.length - 1] ?? "") &&
+    startsLower(lead.text)
+  ) {
+    return true;
+  }
+  return endsOnFalseBoundary(core, lead, resolved);
 }
 
 // Insert a space wherever a citation marker is glued directly to adjacent
 // prose with no whitespace — glued to a following word ("]]The"), glued to a
 // following word via a terminator ("]].The"), or glued to a PRECEDING
-// terminator ("occasionally.[[cite:e1]]"). Left alone, any of these fuses two
+// terminator ("occasionally.[[cite:e1]]", also through closing quotes or
+// brackets: `occasionally."[[cite:e1]]`). Left alone, any of these fuses two
 // sentences into one and lets the second ride the first's citation — the core
-// laundering vector this library exists to close. Normal spacing
-// ("sentence. [[cite:e1]] Next sentence.") is left untouched.
-function normalizeMarkerAdjacency(text: string, marker: RegExp): string {
+// laundering vector this library exists to close. A placeholder glued to a
+// preceding terminator gets the same space. Normal spacing ("sentence.
+// [[cite:e1]] Next sentence.") is left untouched.
+function normalizeMarkerAdjacency(text: string, resolved: ResolvedSplitter): string {
+  type Site = { index: number; text: string; marker: boolean };
+  const sites: Site[] = scanMarkers(text, resolved.marker).map((m) => ({
+    index: m.index,
+    text: m[0],
+    marker: true,
+  }));
+  const placeholders = scanPlaceholders(text, resolved.placeholderGlobal);
+  if (placeholders.length > 0) {
+    for (const p of placeholders) sites.push({ index: p.index, text: p[0], marker: false });
+    sites.sort((a, b) => a.index - b.index || Number(b.marker) - Number(a.marker));
+  }
   let result = "";
   // The last character appended to `result`. Tracked separately because
   // indexing into a string built with `+=` flattens it every time, which made
   // this loop quadratic in the number of markers.
   let tail = "";
   let last = 0;
-  for (const m of scanMarkers(text, marker)) {
-    const start = m.index;
-    const end = start + m[0].length;
+  for (const site of sites) {
+    const start = site.index;
+    if (start < last) continue; // overlaps a site already handled
+    const end = start + site.text.length;
     const before = text.slice(last, start);
     result += before;
     if (before.length > 0) tail = before[before.length - 1];
-    if (TERMINATOR_CLASS.test(tail)) {
-      result += " ";
+    // Walk back over up to three closers inside `before` to find the
+    // terminator they close.
+    let k = start - 1;
+    let closers = 0;
+    while (k >= last && closers < 3 && CLOSER_CLASS.test(text[k])) {
+      k--;
+      closers++;
     }
-    result += m[0];
-    tail = m[0][m[0].length - 1];
+    const terminatorBefore =
+      closers === 0 ? TERMINATOR_CLASS.test(tail) : k >= last && TERMINATOR_CLASS.test(text[k]);
+    if (terminatorBefore) result += " ";
+    result += site.text;
+    tail = site.text[site.text.length - 1];
     let cursor = end;
-    const afterMarker = text[cursor] ?? "";
-    if (TERMINATOR_CLASS.test(afterMarker)) {
-      // A terminator immediately follows the marker (e.g. "]]."): keep it
-      // attached, then check whether THAT is glued to the next word.
-      result += afterMarker;
-      tail = afterMarker;
-      cursor += 1;
-    }
-    // \p{L}\p{N} (any script's letters/digits), not the ASCII-only
-    // [A-Za-z0-9]: a marker glued directly to non-Latin prose ("[[cite:e1]]
-    // こんにちは") needs the same normalizing space as one glued to English.
-    // The next CODE POINT is tested, not the next UTF-16 unit: a letter
-    // outside the BMP (for example a CJK Extension B ideograph) is two units,
-    // and a lone surrogate is not a letter.
-    const next = text.codePointAt(cursor);
-    if (next !== undefined && LETTER_OR_DIGIT.test(String.fromCodePoint(next))) {
-      result += " ";
-      tail = " ";
+    if (site.marker) {
+      const afterMarker = text[cursor] ?? "";
+      if (TERMINATOR_CLASS.test(afterMarker)) {
+        // A terminator immediately follows the marker (e.g. "]]."): keep it
+        // attached, then check whether THAT is glued to the next word.
+        result += afterMarker;
+        tail = afterMarker;
+        cursor += 1;
+      }
+      // Any script's letters/digits, tested by CODE POINT: a letter outside
+      // the BMP is two UTF-16 units, and a lone surrogate is not a letter.
+      const next = text.codePointAt(cursor);
+      if (next !== undefined && LETTER_OR_DIGIT.test(String.fromCodePoint(next))) {
+        result += " ";
+        tail = " ";
+      }
     }
     last = cursor;
   }
   return result + text.slice(last);
 }
 
-// The trailing word of a fragment that ends in ".": the run of letters and
-// dots immediately before the final period, starting at its first letter. It
-// is the same text as /([A-Za-z][A-Za-z.]*)\.$/ captures, found in one
-// backward scan. The regex retried its unbounded `*` from every start
-// position when the run was followed by a character outside the class, which
-// was quadratic on input like "aaaa...a1.".
-function trailingWord(trimmed: string): string | null {
-  let first = -1;
-  for (let i = trimmed.length - 2; i >= 0; i--) {
-    const c = trimmed.charCodeAt(i);
-    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) first = i;
-    else if (c !== 46) break;
-  }
-  return first < 0 ? null : trimmed.slice(first, trimmed.length - 1);
+// --- markdown scaffolding ------------------------------------------------
+
+type LineKind =
+  | "blank"
+  | "fence"
+  | "rule"
+  | "tableSeparator"
+  | "tableRow"
+  | "heading"
+  | "listStart"
+  | "quote"
+  | "paragraph";
+
+const FENCE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+const RULE = /^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+const TABLE_ROW = /^[ \t]*\|.*\|[ \t]*$/;
+const HEADING = /^[ \t]{0,3}#{1,6}(?:[ \t]|$)/;
+const LIST_START =
+  /^[ \t]*(?:[-*+•]|\d{1,3}[.)]|[A-Za-z][.)]|[IVXLCDM]{1,6}\.|\([A-Za-z0-9]{1,3}\))[ \t]+\S/;
+const QUOTE = /^[ \t]*>/;
+const EMPHASIS_LINE = /^[ \t]*(\*\*|__|\*(?=\S)|_(?=\S))(.+?)\1[ \t]*:?[ \t]*$/;
+
+function lineKind(line: string): LineKind {
+  if (BLANK.test(line)) return "blank";
+  if (FENCE.test(line)) return "fence";
+  if (RULE.test(line)) return "rule";
+  if (line.includes("|") && line.includes("-") && /^[ \t|:-]+$/.test(line)) return "tableSeparator";
+  if (TABLE_ROW.test(line)) return "tableRow";
+  if (HEADING.test(line)) return "heading";
+  if (LIST_START.test(line)) return "listStart";
+  if (QUOTE.test(line)) return "quote";
+  return "paragraph";
 }
 
-// Whether a fragment's trailing period is a FALSE boundary (does not end the
-// sentence). `next` is the fragment that would follow; it decides the
-// context-sensitive abbreviations.
-function endsOnFalseBoundary(
-  fragment: string,
-  next: string | undefined,
-  alwaysFuse: Set<string>,
-  contextFuse: Set<string>,
-): boolean {
-  const trimmed = fragment.trimEnd();
-  // Both checks below require a trailing literal ".": abbreviation fusion is
-  // a period-only concept (see AbbreviationConfig's doc comment) and never
-  // applies to "!", "?", or a non-ASCII terminator. Bailing out here when
-  // there isn't one is also a required *performance* guard, not just a
-  // shortcut.
-  if (!trimmed.endsWith(".")) return false;
-  // A single letter is a name initial ("Dana M. Whitfield") only when it
-  // stands alone. A letter glued to a number/currency ("$9M.") is a unit that
-  // really ends the sentence.
-  if (/(?:^|\s)[A-Za-z]\.$/.test(trimmed)) return true;
-  const trailing = trailingWord(trimmed);
-  if (trailing === null) return false;
-  const word = trailing.replace(/\./g, "").toLowerCase();
-  if (alwaysFuse.has(word)) return true;
-  if (contextFuse.has(word)) {
-    // No following fragment -> a real sentence end. A capitalized next
-    // fragment starts a new sentence; lower-case or a digit continues this one.
-    return next != null && !/^[A-Z]/.test(next.trimStart());
-  }
-  return false;
+// Ends like a statement: a terminator other than a question mark, possibly
+// followed by closers.
+function endsLikeStatement(text: string): boolean {
+  const { core } = stripClosers(text.trimEnd());
+  const last = core[core.length - 1] ?? "";
+  return TERMINATOR_CLASS.test(last) && last !== "?" && last !== "？" && last !== "؟" && last !== "⁇";
 }
 
-// A fragment is "citation only" when stripping its markers leaves no prose —
-// the model (or an editor) emitted the marker AFTER the terminal period on
-// its own. Such a fragment must reattach to the preceding sentence, or that
-// sentence reads as ungrounded even though it was cited.
+function carriesCitation(text: string, resolved: ResolvedSplitter): boolean {
+  return hasMarker(text, resolved) || hasPlaceholder(text, resolved);
+}
+
+// A heading is a label unless it carries a marker or placeholder or ends
+// like a statement ("## Prices doubled in 2025.").
+function headingIsClaim(line: string, resolved: ResolvedSplitter): boolean {
+  const text = line.replace(/^[ \t]{0,3}#{1,6}/, "").replace(/[ \t]+#+[ \t]*$/, "");
+  return carriesCitation(text, resolved) || endsLikeStatement(text);
+}
+
+// A short emphasized line ("**Summary**", "**Battery:**") is a label unless
+// it carries a marker or placeholder, ends like a statement, or runs past six
+// words.
+function isEmphasisLabel(line: string, resolved: ResolvedSplitter): boolean {
+  const m = EMPHASIS_LINE.exec(line);
+  if (m === null) return false;
+  const inner = m[2].trim();
+  if (inner === "" || carriesCitation(inner, resolved) || endsLikeStatement(inner)) return false;
+  return inner.split(/\s+/).length <= 6;
+}
+
+// A short line ending in a colon that introduces a list, table or code block
+// ("Here is what the policy says:") is a lead-in, not a claim, unless it
+// carries a marker or placeholder or runs past ten words.
+function isLeadIn(line: string, nextKind: LineKind | undefined, resolved: ResolvedSplitter): boolean {
+  if (nextKind !== "listStart" && nextKind !== "tableRow" && nextKind !== "fence") return false;
+  const text = line.trim();
+  if (!/[:：]$/u.test(text) || carriesCitation(text, resolved)) return false;
+  return text.split(/\s+/).length <= 10;
+}
+
+// Whether `next` continues the sentence that `prev` (a wrapped line) left
+// open: it starts in lower case, or `prev` ends with a comma or a word such
+// as "the", "of" or "and".
+function continuesLine(prev: string, next: string): boolean {
+  const text = next.trimStart();
+  if (startsLower(text) || /^\p{Ll}/u.test(text)) return true;
+  if (!/^[\p{L}\p{N}]/u.test(text)) return false;
+  const end = prev.trimEnd();
+  if (end.endsWith(",")) return true;
+  const word = /[\p{L}]+$/u.exec(end);
+  return word !== null && CONNECTORS.has(word[0].toLowerCase());
+}
+
+/**
+ * Turn lines into text blocks for the sentence splitter, setting markdown
+ * scaffolding aside as non-claims and joining hard-wrapped lines.
+ */
+function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: string[]): string[] {
+  const lines = text.replace(LINE_BREAKS, "\n").split("\n");
+  if (!resolved.markdown) return lines;
+  const kinds = lines.map(lineKind);
+  // Pair fences in order; an unclosed fence hides nothing.
+  const inFence = new Uint8Array(lines.length);
+  let open = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (kinds[i] !== "fence") continue;
+    if (open < 0) open = i;
+    else {
+      inFence.fill(1, open, i + 1);
+      open = -1;
+    }
+  }
+
+  const blocks: string[] = [];
+  let current: string | null = null;
+  let currentKind: LineKind | null = null;
+  const flush = () => {
+    if (current !== null) blocks.push(current);
+    current = null;
+    currentKind = null;
+  };
+  let fenceStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const kind = kinds[i];
+    if (inFence[i] === 1) {
+      flush();
+      if (fenceStart < 0) fenceStart = i;
+      if (i + 1 >= lines.length || inFence[i + 1] === 0 || (kinds[i] === "fence" && i > fenceStart)) {
+        nonClaims.push(lines.slice(fenceStart, i + 1).join("\n"));
+        fenceStart = -1;
+      }
+      continue;
+    }
+    switch (kind) {
+      case "blank":
+        flush();
+        break;
+      case "fence":
+      case "rule":
+      case "tableSeparator":
+        flush();
+        nonClaims.push(line.trim());
+        break;
+      case "tableRow": {
+        flush();
+        const header = kinds[i + 1] === "tableSeparator" && inFence[i + 1] === 0;
+        if (header && !carriesCitation(line, resolved)) nonClaims.push(line.trim());
+        else blocks.push(line);
+        break;
+      }
+      case "heading":
+        flush();
+        if (headingIsClaim(line, resolved)) blocks.push(line);
+        else nonClaims.push(line.trim());
+        break;
+      default: {
+        let nextKind: LineKind | undefined;
+        for (let k = i + 1; k < lines.length; k++) {
+          if (kinds[k] !== "blank") {
+            nextKind = kinds[k];
+            break;
+          }
+        }
+        if (
+          isEmphasisLabel(line, resolved) ||
+          (kind === "paragraph" && current === null && isLeadIn(line, nextKind, resolved))
+        ) {
+          flush();
+          nonClaims.push(line.trim());
+          break;
+        }
+        const joinable =
+          current !== null &&
+          (kind === "paragraph" || (kind === "quote" && currentKind === "quote")) &&
+          continuesLine(
+            current,
+            kind === "quote" ? line.replace(QUOTE, "") : line,
+          );
+        if (joinable) {
+          current = `${current as string} ${line.trim()}`;
+        } else {
+          flush();
+          current = line;
+          currentKind = kind;
+        }
+      }
+    }
+  }
+  flush();
+  return blocks;
+}
+
+// --- clause splitting ----------------------------------------------------
+
+// Whether a fragment is "citation only": stripping its markers leaves no
+// prose — the model (or an editor) emitted the marker AFTER the terminal
+// period on its own. Such a fragment must reattach to the preceding sentence,
+// or that sentence reads as ungrounded even though it was cited.
 function isCitationOnly(fragment: string, marker: RegExp): boolean {
   const matches = scanMarkers(fragment, marker);
   if (matches.length === 0) return false;
-  // \p{L}\p{N} (any script), not [A-Za-z0-9]: prose in Japanese, Arabic,
-  // Cyrillic, etc. must count as "real content" here too, or a non-Latin
-  // sentence sitting next to a citation marker gets misread as pure
-  // leftover punctuation and silently absorbed into the previous sentence.
-  return !LETTER_OR_DIGIT.test(removeMatches(fragment, matches));
+  let rest = "";
+  let last = 0;
+  for (const m of matches) {
+    rest += fragment.slice(last, m.index);
+    last = m.index + m[0].length;
+  }
+  rest += fragment.slice(last);
+  // Any script's letters/digits count as real content.
+  return !LETTER_OR_DIGIT.test(rest);
 }
 
-// A fragment can BEGIN with citation markers that actually terminate the
-// PREVIOUS sentence ("...occasionally. [[cite:e1]] The claimant lost
-// $500,000."). The split orphans those markers onto the FOLLOWING fragment,
-// where they would falsely ground it — the laundering vector that lets a
-// fabricated, uncited claim ride an earlier citation. Peel any leading
-// markers off so the caller can reattach them to the sentence they actually
-// terminate. A citation can only ground prose that precedes or surrounds it
-// within the SAME sentence. Invisible characters (zero-width space, bidi
-// controls, ...) in front of a marker count as leading space: the reader sees
-// the marker at the start, so it is peeled, and the invisible characters
-// travel with it.
-function peelLeadingMarkers(
+// A fragment can BEGIN with citation markers or placeholders that actually
+// terminate the PREVIOUS sentence ("...occasionally. [[cite:e1]] The
+// claimant lost $500,000."). The split orphans them onto the FOLLOWING
+// fragment, where a marker would falsely ground it (the laundering vector
+// that lets a fabricated, uncited claim ride an earlier citation) and a
+// placeholder would mislabel it as the honest gap. Peel them off so the
+// caller can reattach them to the sentence they terminate. Invisible
+// characters in front of a marker count as leading space: the reader sees the
+// marker at the start, so it is peeled, and the invisible characters travel
+// with it.
+function peelLeading(
   fragment: string,
-  marker: RegExp,
-): { markers: string; rest: string } {
+  resolved: ResolvedSplitter,
+): { peeled: Array<{ text: string; placeholder: boolean }>; rest: string } {
   let rest = fragment.trimStart();
-  const collected: string[] = [];
+  const peeled: Array<{ text: string; placeholder: boolean }> = [];
   for (;;) {
-    const lead = (INVISIBLE_LEAD.exec(rest) as RegExpExecArray)[0].length;
-    marker.lastIndex = 0;
-    const m = marker.exec(rest);
-    if (m === null) break;
-    if (m[0].length === 0) {
-      marker.lastIndex = 0;
-      throw new GroundingConfigError(
-        `markerPattern matched zero characters at index ${String(m.index)}; a marker must match at least one character.`,
-      );
+    const lead = invisibleRunEnd(rest, 0);
+    let len = markerAt(rest, lead, resolved);
+    let placeholder = false;
+    if (len === 0) {
+      len = placeholderAt(rest, lead, resolved);
+      if (len === 0) break;
+      placeholder = true;
     }
-    if (m.index !== lead) break;
-    const end = lead + m[0].length;
-    collected.push(rest.slice(0, end));
-    rest = rest.slice(end).trimStart();
+    peeled.push({ text: rest.slice(0, lead + len), placeholder });
+    rest = rest.slice(lead + len).trimStart();
   }
-  marker.lastIndex = 0;
-  return { markers: collected.join(" "), rest };
+  return { peeled, rest };
 }
 
 // Whether a unit shows nothing to a reader: empty, or only whitespace,
@@ -394,41 +885,46 @@ function isBlank(unit: string): boolean {
   return BLANK.test(unit);
 }
 
+const HTML_ENTITY_BEFORE = /&(?:[A-Za-z][A-Za-z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6})$/;
+
 // Split ONE sentence into clause-level grounding units on ';', an em-dash, or
-// a colon that introduces a new clause. Bracket-aware via MATCHED-pair
-// tracking: a separator inside a real `[ ... ]` span (or inside whatever the
-// marker/placeholder patterns match, even if they don't use square brackets)
-// is never a split point — but an UNbalanced '[' cannot suppress later
-// splits, so bracket handling fails CLOSED rather than silently swallowing
-// the rest of the sentence.
+// (only when the clause before it already carries a citation) a colon or a
+// dash separator ("–", "--", " - "). Bracket- and parenthesis-aware via
+// MATCHED-pair tracking: a separator inside a real `[ ... ]` or `( ... )` span
+// (or inside whatever the marker/placeholder patterns match, even if they
+// don't use brackets) is never a split point — but an UNbalanced bracket
+// cannot suppress later splits, so bracket handling fails CLOSED rather than
+// silently swallowing the rest of the sentence.
 function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): string[] {
   const n = sentence.length;
   // Shielded ranges go into a difference array: +1 where a range starts, -1
   // just past where it ends. A running sum over it (below) says how many
   // ranges cover each position, so a position is shielded exactly when the sum
   // is above zero. Marking a range is O(1) however long or deeply nested it
-  // is; repainting every position of every matched pair, as the code did
-  // before, was quadratic on "[[[...x...]]]".
+  // is; repainting every position of every matched pair was quadratic on
+  // "[[[...x...]]]".
   const cover = new Int32Array(n + 1);
-  const openStack: number[] = [];
+  const squareStack: number[] = [];
+  const roundStack: number[] = [];
   for (let i = 0; i < n; i++) {
-    if (sentence[i] === "[") {
-      openStack.push(i);
-    } else if (sentence[i] === "]" && openStack.length > 0) {
-      const open = openStack.pop()!;
+    const c = sentence[i];
+    if (c === "[") squareStack.push(i);
+    else if (c === "(" || c === "（") roundStack.push(i);
+    else if (c === "]" && squareStack.length > 0) {
+      const open = squareStack.pop()!;
+      cover[open] += 1;
+      cover[i + 1] -= 1;
+    } else if ((c === ")" || c === "）") && roundStack.length > 0) {
+      const open = roundStack.pop()!;
       cover[open] += 1;
       cover[i + 1] -= 1;
     }
   }
-  // Belt-and-suspenders: also shield whatever the marker/placeholder regexes
-  // match directly, in case a caller's marker syntax doesn't use brackets at
-  // all (e.g. "{{ref:id}}"). While scanning marker matches, also record each
-  // match's END offset into a prefix-count array: the colon-boundary check
-  // below needs to know "does the pending clause contain a marker?" at every
-  // ':', and re-slicing + re-testing the (growing) pending clause from
-  // scratch each time is O(n) per query — O(n^2) overall on a long,
-  // marker-free, colon-heavy input. A prefix count answers the same question
-  // in O(1) per query.
+  // Also shield whatever the marker/placeholder regexes match directly, in
+  // case a caller's marker syntax doesn't use brackets at all (e.g.
+  // "{{ref:id}}"). While scanning marker matches, record each match's END
+  // offset into a prefix-count array: the cited-separator check below needs
+  // to know "does the pending clause contain a marker?" in O(1).
   const markerEndCounts = new Uint32Array(n + 1);
   for (const m of scanMarkers(sentence, resolved.marker)) {
     const start = m.index;
@@ -437,15 +933,14 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
     cover[end] -= 1;
     markerEndCounts[end] += 1;
   }
-  for (const m of sentence.matchAll(resolved.placeholderGlobal)) {
-    const start = m.index;
-    const end = start + m[0].length;
-    cover[start] += 1;
-    cover[end] -= 1;
+  for (const m of scanPlaceholders(sentence, resolved.placeholderGlobal)) {
+    cover[m.index] += 1;
+    cover[m.index + m[0].length] -= 1;
   }
   for (let i = 1; i <= n; i++) markerEndCounts[i] += markerEndCounts[i - 1];
 
   const isDigit = (c: string | undefined) => c != null && c >= "0" && c <= "9";
+  const isSpace = (c: string | undefined) => c == null || /\s/u.test(c);
   const units: string[] = [];
   let start = 0;
   let depth = 0;
@@ -453,24 +948,42 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
     depth += cover[i];
     if (depth > 0) continue;
     const ch = sentence[i];
-    // Split a colon ONLY when the clause BEFORE it already carries a
-    // citation. The laundering vector is a cite reaching FORWARD across the
-    // colon to ground an uncited clause; requiring a marker in the pending
-    // clause catches exactly that. A leading uncited label ("Results: ...
-    // [[cite:e1]]") is left intact, behaving like an accepted comma-join.
-    // Numeric colons (time "9:30", ratio "3:1") are never boundaries.
-    // markerEndCounts[i] - markerEndCounts[start] is the number of marker
-    // matches whose end offset falls in (start, i] — i.e. a marker fully
-    // inside the pending clause. Markers can't straddle an accepted split
-    // point (a split point is never `inside` a marker match), so this is
-    // exactly equivalent to "the pending clause contains a marker."
-    const isColonBoundary =
-      ch === ":" &&
-      !(isDigit(sentence[i - 1]) && isDigit(sentence[i + 1])) &&
-      markerEndCounts[i] - markerEndCounts[start] > 0;
-    if (ch === ";" || ch === "—" || isColonBoundary) {
+    // markerEndCounts[i] - markerEndCounts[start] counts marker matches that
+    // end inside the pending clause. Markers can't straddle an accepted split
+    // point (a split point is never inside a marker match), so this is
+    // exactly "the pending clause contains a marker".
+    const cited = markerEndCounts[i] - markerEndCounts[start] > 0;
+    let width = 0;
+    if (ch === ";" || ch === "；") {
+      // "&amp;" and "&#39;" end in a semicolon that is not a clause break.
+      if (!HTML_ENTITY_BEFORE.test(sentence.slice(Math.max(0, i - 33), i))) width = 1;
+    } else if (ch === "—") {
+      width = 1;
+    } else if (cited) {
+      if (ch === ":" || ch === "：") {
+        // A colon splits ONLY when the clause BEFORE it already carries a
+        // citation: the laundering vector is a cite reaching FORWARD across
+        // it. A leading uncited label ("Results: ... [[cite:e1]]") stays
+        // intact, like an accepted comma-join. Numeric colons (time "9:30",
+        // ratio "3:1") and a URL scheme ("https://") are never boundaries.
+        const numeric = isDigit(sentence[i - 1]) && isDigit(sentence[i + 1]);
+        const url = sentence[i + 1] === "/" && sentence[i + 2] === "/";
+        if (!numeric && !url) width = 1;
+      } else if (ch === "–" || ch === "―") {
+        // An en dash between digits is a range ("2020–2025"), never a break.
+        if (!(isDigit(sentence[i - 1]) && isDigit(sentence[i + 1]))) width = 1;
+      } else if (ch === "-") {
+        let run = 1;
+        while (sentence[i + run] === "-") run++;
+        if (run >= 2) width = run;
+        else if (isSpace(sentence[i - 1]) && isSpace(sentence[i + 1])) width = 1;
+      }
+    }
+    if (width > 0) {
       const unit = sentence.slice(start, i).trim();
       if (!isBlank(unit)) units.push(unit);
+      for (let k = 1; k < width; k++) depth += cover[i + k];
+      i += width - 1;
       start = i + 1;
     }
   }
@@ -479,70 +992,98 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
   return units;
 }
 
-/** @internal split with an already-resolved configuration. */
-export function splitResolved(text: string, resolved: ResolvedSplitter): string[] {
-  const { alwaysFuse, contextFuse } = resolved;
-  // A default-ignorable character right after a terminator would keep the
-  // boundary regex below from seeing "terminator, whitespace" and fuse two
-  // sentences (or a marker's sentence and the next) without a visible trace.
-  // A real space in front of it restores the boundary.
-  const separated = text.replace(TERMINATOR_THEN_INVISIBLE, "$1 ");
-  const normalized = normalizeMarkerAdjacency(separated, resolved.marker);
+/** @internal The units of a document, plus the markdown scaffolding set aside as non-claims. */
+export interface SplitResult {
+  units: string[];
+  nonClaims: string[];
+}
 
+/** @internal split with an already-resolved configuration. */
+export function splitResolved(text: string, resolved: ResolvedSplitter): SplitResult {
+  // One scan of the whole text up front, so a marker pattern that matches
+  // zero characters throws even where the text is set aside as markdown
+  // scaffolding or is empty.
+  scanMarkers(text, resolved.marker);
+  const nonClaims: string[] = [];
   const sentences: string[] = [];
-  for (const line of normalized.split("\n")) {
-    // Split on ASCII terminators followed by whitespace, AND on non-ASCII
-    // full stops (they may carry no trailing space, e.g. in CJK text).
-    const parts = line.split(/(?<=[.!?。．！？])\s+|(?<=[。．！？])(?=\S)/);
+  // Sentences that open a line block. A placeholder at the start of one
+  // belongs to the text after it, not to the previous line.
+  const blockStarts = new Set<number>();
+  let atBlockStart = true;
+  const pushSentence = (raw: string) => {
+    const trimmed = raw.trim();
+    if (isBlank(trimmed)) return;
+    if (atBlockStart) blockStarts.add(sentences.length);
+    atBlockStart = false;
+    sentences.push(trimmed);
+  };
+  for (const block of prepareBlocks(text, resolved, nonClaims)) {
+    atBlockStart = true;
+    // A default-ignorable character right after a terminator (and its
+    // closers) would keep the boundary regex from seeing "terminator,
+    // whitespace" and fuse two sentences without a visible trace. A real
+    // space in front of it restores the boundary.
+    const separated = block.replace(TERMINATOR_THEN_INVISIBLE, "$1 ");
+    const normalized = normalizeMarkerAdjacency(separated, resolved);
+    const parts = normalized.split(SENTENCE_BOUNDARY);
     let buffer = "";
     for (let i = 0; i < parts.length; i++) {
       buffer = buffer ? `${buffer} ${parts[i]}` : parts[i];
-      // endsOnFalseBoundary only inspects the trailing word of its `fragment`
-      // argument ($-anchored regexes), which is fully contained in `parts[i]`
-      // itself regardless of how much has already accumulated in `buffer`.
-      // Passing the whole (potentially long-growing) `buffer` here instead of
-      // just the newly-appended part is O(current buffer length) per
-      // iteration purely from re-flattening and re-scanning it — O(n^2) over
-      // a long run of fused fragments (e.g. many single-letter initials in a
-      // row, which never hit a real sentence boundary). Passing `parts[i]`
-      // keeps each check O(that part's length) and the whole loop O(n).
-      if (!endsOnFalseBoundary(parts[i], parts[i + 1], alwaysFuse, contextFuse)) {
-        const trimmed = buffer.trim();
-        if (!isBlank(trimmed)) sentences.push(trimmed);
+      // fusesWithNext only inspects the end of `parts[i]` and the start of
+      // `parts[i + 1]`, never the whole (possibly long) buffer, so the loop
+      // stays linear over a long run of fused fragments.
+      if (i + 1 >= parts.length || !fusesWithNext(parts[i], parts[i + 1], resolved)) {
+        pushSentence(buffer);
         buffer = "";
       }
     }
-    const trimmed = buffer.trim();
-    if (!isBlank(trimmed)) sentences.push(trimmed);
   }
 
   // Clause-level split so an uncited clause can't ride a cited one inside the
   // same sentence. Erring toward more units is safe: it fails closed (flags
   // for a citation), it never launders.
-  const units = sentences.flatMap((s) => splitGroundingUnits(s, resolved));
+  const units: string[] = [];
+  const unitStartsBlock: boolean[] = [];
+  sentences.forEach((sentence, index) => {
+    splitGroundingUnits(sentence, resolved).forEach((unit, k) => {
+      units.push(unit);
+      unitStartsBlock.push(k === 0 && blockStarts.has(index));
+    });
+  });
 
-  // Reattach orphaned citation markers to the unit they belong to.
+  // Reattach orphaned citation markers and placeholders to the unit they
+  // belong to.
   const merged: string[] = [];
-  for (const unit of units) {
-    const { markers, rest } = peelLeadingMarkers(unit, resolved.marker);
-    if (markers) {
-      // Leading markers sat after the PREVIOUS unit's terminal period.
-      // Attach them there so they can't ground the prose that follows. If
-      // this is the FIRST unit, there is no prior unit for them to
-      // terminate, so they ground nothing and are dropped.
-      if (merged.length > 0) {
-        merged[merged.length - 1] = `${merged[merged.length - 1]} ${markers}`;
+  for (let u = 0; u < units.length; u++) {
+    const unit = units[u];
+    const { peeled, rest } = peelLeading(unit, resolved);
+    if (peeled.length > 0) {
+      const firstPlaceholder = peeled.findIndex((item) => item.placeholder);
+      if (merged.length > 0 && unitStartsBlock[u] && firstPlaceholder >= 0) {
+        // A placeholder that opens a line covers that line: markers before
+        // it still go back to the previous unit, the rest stays together.
+        const markers = peeled.slice(0, firstPlaceholder).map((item) => item.text);
+        if (markers.length > 0) merged[merged.length - 1] = `${merged[merged.length - 1]} ${markers.join(" ")}`;
+        const kept = [...peeled.slice(firstPlaceholder).map((item) => item.text), rest].join(" ").trim();
+        if (!isBlank(kept)) merged.push(kept);
+        continue;
       }
-      // `rest` already went through peelLeadingMarkers' trimStart(), so if
-      // it's non-empty it necessarily starts with (and therefore contains) a
-      // non-whitespace character — no need to additionally require that
-      // character be ASCII alnum. The old `[A-Za-z0-9]` guard here silently
-      // discarded any surviving remainder written in a non-Latin script
-      // (e.g. a whole CJK sentence right after a peeled marker) or made of
-      // bare punctuation (e.g. a lone "!"), deleting real content from the
-      // output instead of just an empty string. Only a remainder that shows
-      // nothing (invisible characters alone) is dropped.
-      if (!isBlank(rest)) merged.push(rest);
+      if (merged.length > 0) {
+        // They sat after the PREVIOUS unit's terminal period.
+        const group = peeled.map((item) => item.text).join(" ");
+        merged[merged.length - 1] = `${merged[merged.length - 1]} ${group}`;
+        // Only a remainder that shows nothing is dropped; non-Latin text and
+        // bare punctuation are kept as their own unit.
+        if (!isBlank(rest)) merged.push(rest);
+      } else {
+        // Nothing before them. A marker grounds nothing and is dropped; from
+        // the first placeholder on, the unit is kept whole, so a gap marker
+        // written in front of its sentence still covers it.
+        const first = peeled.findIndex((item) => item.placeholder);
+        const kept =
+          first < 0 ? rest : [...peeled.slice(first).map((item) => item.text), rest].join(" ");
+        if (!isBlank(kept)) merged.push(kept.trim());
+      }
       continue;
     }
     // Trailing citation-only fragment (marker after the period, on its own).
@@ -552,7 +1093,7 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): string[
     }
     merged.push(unit);
   }
-  return merged;
+  return { units: merged, nonClaims };
 }
 
 /**
@@ -561,29 +1102,33 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): string[
  * sentence). Hardened against:
  *  - abbreviation periods that don't end a sentence (configurable list)
  *  - a citation marker glued to punctuation/prose with no whitespace
- *  - non-ASCII sentence terminators (。．！？)
- *  - a marker sitting right after a period, which would otherwise be read as
- *    grounding the sentence that follows it (leading-marker peeling)
+ *  - non-ASCII sentence terminators (。．！？…‼।॥؟۔)
+ *  - a marker or placeholder sitting right after a period, even behind
+ *    closing quotes, brackets or bold, which would otherwise be read as
+ *    belonging to the sentence that follows it (leading-marker peeling)
  *  - clause-internal fabrications riding a citation elsewhere in the sentence
- *    (semicolon/em-dash/cited-colon clause splitting)
+ *    (semicolon/em-dash splitting, and colon/dash splitting after a cited
+ *    clause)
  *  - malformed/unbalanced brackets (fails closed: never suppresses a split)
  *  - invisible (default-ignorable) characters placed between a terminator and
  *    the text or marker after it, which would hide a sentence boundary
  *
- * A unit made only of whitespace and invisible characters is dropped, never
+ * Markdown scaffolding (see `SplitterConfig.markdown`) is not returned. A unit
+ * made only of whitespace and invisible characters is dropped, never
  * returned. Work is linear in the length of `text` for the default patterns.
  * A caller-supplied pattern can still be slow if its own regex backtracks
  * badly; that is the caller's configuration.
  *
  * @throws {TypeError} if `text` is not a string, `config` is not a plain
- *   object, or an option has the wrong type (`abbreviations` lists must be
- *   dense arrays of strings; the patterns must be `RegExp`s).
+ *   object or has an unknown key, or an option has the wrong type
+ *   (`abbreviations` lists must be dense arrays of strings made of letters
+ *   and dots; the patterns must be `RegExp`s; `markdown` must be a boolean).
  * @throws {GroundingConfigError} if `markerPattern` matches zero characters
  *   anywhere it is scanned.
  */
 export function splitSentences(text: string, config: SplitterConfig = {}): string[] {
   assertString(text, "text");
-  return splitResolved(text, resolveSplitterConfig(config));
+  return splitResolved(text, resolveSplitterConfig(config)).units;
 }
 
 /**
@@ -611,6 +1156,22 @@ export function citedIdsOf(sentence: string, marker: RegExp): string[] {
   return ids;
 }
 
+/** @internal one marker match: its id (if the pattern captured one) and where it sits. */
+export interface MarkerSite {
+  id: string | undefined;
+  start: number;
+  end: number;
+}
+
+/** @internal every marker in `sentence` with its position. */
+export function markerSitesOf(sentence: string, marker: RegExp): MarkerSite[] {
+  return scanMarkers(sentence, marker).map((m) => ({
+    id: m[1],
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+}
+
 /**
  * Every distinct citation marker id referenced anywhere in `text`,
  * first-appearance order.
@@ -628,9 +1189,14 @@ export function extractAllCitedIds(
 }
 
 /**
- * Remove citation markers for display/export while leaving prose intact.
- * Collapses any double space or space-before-punctuation left behind by the
- * removal (e.g. "reach [[cite:e1]]." -> "reach.", not "reach .").
+ * Remove citation markers for display/export. Only the text at each marker
+ * site changes: a marker (or a run of markers separated by spaces or tabs) is
+ * removed together with the spaces and tabs around it, and replaced by one
+ * space when there was space on either side or when it sat between two
+ * letters or digits ("word[[cite:e1]]word" -> "word word"), or by nothing
+ * when it sat before punctuation, a line break or the end of the text
+ * ("reach [[cite:e1]]." -> "reach."). Everything else, including spacing
+ * elsewhere in the text, is returned exactly as given.
  *
  * @throws {TypeError} if `text` is not a string or `markerPattern` is not a
  *   `RegExp`.
@@ -644,10 +1210,42 @@ export function stripCitationMarkers(
   return stripMarkersOf(text, globalCopy(markerPattern, "markerPattern"));
 }
 
+const SPACE_OR_TAB = (c: string | undefined) => c === " " || c === "\t";
+const TIGHT_BEFORE = /[.,;:!?)\]}”’"'»。．！？、，；：）]/u;
+
 /** @internal marker removal with a private, already-normalized marker regex. */
 export function stripMarkersOf(text: string, marker: RegExp): string {
-  return removeMatches(text, scanMarkers(text, marker))
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/[ \t]+([.,;:!?])/g, "$1")
-    .trimEnd();
+  const matches = scanMarkers(text, marker);
+  if (matches.length === 0) return text;
+  let out = "";
+  let last = 0;
+  let i = 0;
+  while (i < matches.length) {
+    const start = matches[i].index;
+    let end = start + matches[i][0].length;
+    let j = i + 1;
+    // Group markers separated only by spaces or tabs into one site.
+    while (j < matches.length) {
+      let k = end;
+      while (k < matches[j].index && SPACE_OR_TAB(text[k])) k++;
+      if (k !== matches[j].index) break;
+      end = matches[j].index + matches[j][0].length;
+      j++;
+    }
+    let left = start;
+    while (left > last && SPACE_OR_TAB(text[left - 1])) left--;
+    let right = end;
+    while (right < text.length && SPACE_OR_TAB(text[right])) right++;
+    const before = left > 0 ? text[left - 1] : "";
+    const after = right < text.length ? text[right] : "";
+    let joiner = "";
+    if (after === "" || after === "\n" || after === "\r" || TIGHT_BEFORE.test(after)) joiner = "";
+    else if (before === "" || before === "\n" || before === "\r") joiner = "";
+    else if (left < start || right > end) joiner = " ";
+    else if (LETTER_OR_DIGIT.test(before) && LETTER_OR_DIGIT.test(after)) joiner = " ";
+    out += text.slice(last, left) + joiner;
+    last = right;
+    i = j;
+  }
+  return out + text.slice(last);
 }

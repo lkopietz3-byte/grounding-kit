@@ -77,3 +77,23 @@ export function readStringList(value: unknown, label: string): string[] {
   }
   return copy;
 }
+
+/**
+ * Throws a TypeError naming the first own enumerable key of `value` that is
+ * not in `allowed`, so a misspelled option ("supoprts", "markerPatern") fails
+ * loudly instead of silently falling back to a default. Keys are listed
+ * without reading any value, so a getter is never triggered here.
+ */
+export function assertKnownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) {
+      throw new TypeError(
+        `${label} has an unknown option ${JSON.stringify(key)} (allowed: ${allowed.join(", ")}).`,
+      );
+    }
+  }
+}
