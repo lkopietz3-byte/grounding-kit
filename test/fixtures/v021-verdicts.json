@@ -399,6 +399,14 @@
   "review 401409e: a custom marker ending in a period, then a zero-width space": false,
   "md: a fence opener with a citation is judged": false,
   "md: a fence opener with a citation keeps an uncited body as claims": false,
+  "field D1: a placeholder note is not read as claim words": true,
+  "field D2: a period after a marker after a sentence-final abbreviation": true,
+  "field D2: a period after a marker after a full stop": false,
+  "field: two cited spans each backed near verbatim by its own source": true,
+  "field guard: a short span with a wrong number does not pass on its own": false,
+  "limit: a changed number passes the default matcher (field trial)": true,
+  "limit: an inserted negation passes the default matcher (field trial)": true,
+  "limit: a faithful paraphrase fails the default matcher (field trial)": false,
   "limit: conversational filler counts as an uncited sentence": false
  }
 }

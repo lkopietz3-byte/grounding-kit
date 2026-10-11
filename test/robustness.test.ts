@@ -25,12 +25,11 @@ describe("bug: non-ASCII / punctuation-only content dropped after a peeled marke
     expect(doc.sentences.map((s) => s.sentence)).toContain("こんにちは。");
   });
 
-  it("keeps bare punctuation that follows a peeled leading marker", () => {
+  it("keeps bare punctuation that follows a peeled leading marker, with its sentence (field trial D2)", () => {
     const text = "The device passed testing. [[cite:e1]] ! It shipped.";
     const sentences = splitSentences(text);
     expect(sentences).toEqual([
-      "The device passed testing. [[cite:e1]]",
-      "!",
+      "The device passed testing. [[cite:e1]]!",
       "It shipped.",
     ]);
   });

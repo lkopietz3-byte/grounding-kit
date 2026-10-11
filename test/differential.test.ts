@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PLACEHOLDER_PATTERN, splitSentences, type SplitterConfig } from "../src/index.js";
+import { DEFAULT_MARKER_PATTERN, DEFAULT_PLACEHOLDER_PATTERN, splitSentences, type SplitterConfig } from "../src/index.js";
 import { splitSentences as legacySplitSentences } from "./legacy/legacySplitter.js";
 import { mulberry32, pick } from "./helpers/prng.js";
 
@@ -104,8 +104,21 @@ const CHANGED_SHAPES = [
   /[.!?。．！？]\s*\]/u,
 ];
 
+// Field-trial round (D2): a marker followed by text with no letter or digit
+// keeps that text with its sentence instead of making it a unit of its own.
+function markerBeforePunctuation(text: string, config: SplitterConfig): boolean {
+  const marker = config.markerPattern ?? DEFAULT_MARKER_PATTERN;
+  const re = new RegExp(marker.source, `${marker.flags.replace(/[gy]/g, "")}g`);
+  for (const m of text.matchAll(re)) {
+    const after = text.slice(m.index + m[0].length).trimStart();
+    if (after !== "" && !/^[\p{L}\p{N}]/u.test(after)) return true;
+  }
+  return false;
+}
+
 function touchesChangedShape(text: string, config: SplitterConfig): boolean {
   if (CHANGED_SHAPES.some((re) => re.test(text))) return true;
+  if (markerBeforePunctuation(text, config)) return true;
   const placeholder = config.placeholderPattern ?? DEFAULT_PLACEHOLDER_PATTERN;
   return new RegExp(placeholder.source, placeholder.flags.replace(/[gy]/g, "")).test(text);
 }

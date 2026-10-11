@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PLACEHOLDER_PATTERN,
+  GroundingConfigError,
   classifyDocument,
   classifySentence,
   defaultSupports,
@@ -315,17 +316,91 @@ describe("401409e review: protected ranges are tested where the cut happens", ()
     expect(splitSentences("Claim [[a. B]] more.", { markerPattern })).toEqual(["Claim [[a. B]] more."]);
   });
 
-  it("splits after a marker whose pattern swallows trailing whitespace", () => {
+  it("refuses a marker pattern that swallows trailing whitespace (f39a77e review)", () => {
     const markerPattern = /\{\{(\w+)\}\}\. /g;
-    expect(splitSentences("Claim one {{a}}.  Claim two.", { markerPattern })).toEqual([
-      "Claim one {{a}}. ",
-      "Claim two.",
-    ].map((u) => u.trim()));
+    expect(() => splitSentences("Claim one {{a}}.  Claim two.", { markerPattern })).toThrow(GroundingConfigError);
   });
 
   it("does not let a cited dash run eat into a marker that starts with dashes", () => {
     const markerPattern = /(--\w+--)/g;
     const units = splitSentences("Claim --a-- then more --b--.", { markerPattern });
     expect(units.join(" ")).toContain("--b--");
+  });
+});
+
+describe("f39a77e review: a marker or placeholder may not start or end with whitespace", () => {
+  const refused: Array<[string, Record<string, RegExp>]> = [
+    ["marker ending in a space", { markerPattern: /\{\{(\w+)\}\}\. /g }],
+    ["marker ending in \\s*", { markerPattern: /\{\{(\w+)\}\}\s*/g }],
+    ["marker starting with a space", { markerPattern: / \{\{(\w+)\}\}/g }],
+    ["marker starting with \\s", { markerPattern: /\s\[(\d+)\]/g }],
+    ["marker ending in a class with a space", { markerPattern: /\{\{(\w+)\}\}[ .]/g }],
+    ["one alternative ending in a space", { markerPattern: /\{\{(\w+)\}\}|\[(\d+)\] /g }],
+    ["placeholder ending in an optional space", { placeholderPattern: /\[tbd\] ?/i }],
+  ];
+  for (const [name, config] of refused) {
+    it(`refuses a ${name} before reading any text`, () => {
+      expect(() => splitSentences("", config)).toThrow(GroundingConfigError);
+      expect(() => classifyDocument("", {}, config)).toThrow(/may not start or end with whitespace/);
+    });
+  }
+
+  it("refuses at the first real match when the source does not show it", () => {
+    const config = { markerPattern: /\{\{(\w+)\}\}(?:\.| )/g };
+    expect(splitSentences("Claim {{a}}.", config)).toEqual(["Claim {{a}}."]);
+    expect(() => classifyDocument("Claim {{a}} more.", { a: "claim" }, config)).toThrow(GroundingConfigError);
+  });
+
+  it("accepts the default patterns and ordinary custom ones", () => {
+    for (const config of [{}, { markerPattern: /\[(\d+)\]/g }, { placeholderPattern: /\[(?:tbd|unsourced)\]/i }]) {
+      expect(() => classifyDocument("Claim [1] [tbd] [[cite:e1]].", { e1: "claim" }, config)).not.toThrow();
+    }
+  });
+
+  it("classification cannot turn a lost unknown id into a clean placeholder (the review's document)", () => {
+    expect(() =>
+      classifyDocument("Claim [TK] {{missing}}.  Another gap [TK].", {}, { markerPattern: /\{\{(\w+)\}\}\. /g }),
+    ).toThrow(GroundingConfigError);
+  });
+
+  it("a marker pattern that depends on its surroundings fails loudly instead of losing a citation", () => {
+    // The lookbehind finds "[1]" after a space in the whole text, but not at
+    // the start of the sentence it lands in, so the citation would vanish.
+    const config = { markerPattern: /(?<= )\[(\d+)\]/g };
+    expect(() =>
+      classifyDocument("Claim one. [1] Claim two [2] [TK].", { "1": "claim one", "2": "claim two" }, config),
+    ).toThrow(/matched different text once the document was split/);
+  });
+});
+
+describe("README recipes", () => {
+  const numbersIn = (text: string) => text.match(/\d+(?:[.,]\d+)*/g) ?? [];
+  const numberAware = (claim: string, evidence: string): boolean => {
+    const available = new Set(numbersIn(evidence));
+    return numbersIn(claim).every((n) => available.has(n)) && defaultSupports(claim, evidence);
+  };
+
+  it("a number-aware supports catches a changed number the default passes", () => {
+    const evidence = { e1: "the tower stands 330 metres tall in Paris" };
+    const wrong = "The tower stands 300 metres tall in Paris [[cite:e1]].";
+    const right = "The tower stands 330 metres tall in Paris [[cite:e1]].";
+    expect(classifyDocument(wrong, evidence).isClean).toBe(true);
+    expect(classifyDocument(wrong, evidence, { supports: numberAware }).isClean).toBe(false);
+    expect(classifyDocument(right, evidence, { supports: numberAware }).isClean).toBe(true);
+  });
+
+  it("splits verdicts into hard blocks and review flags", () => {
+    const evidence = { e1: "the dataset is not publicly available to avoid overfitting" };
+    const result = classifyDocument(
+      "The test data is kept private so models cannot overfit it [[cite:e1]]. Prices doubled. A claim [[cite:nope]].",
+      evidence,
+    );
+    const hard = (s: (typeof result.sentences)[number]) =>
+      s.status === "ungrounded" ||
+      Object.values(s.reasons).some((r) => r === "unknown-id" || r === "invalid-evidence");
+    expect(result.sentences.filter(hard).map((s) => s.sentence)).toEqual(["Prices doubled.", "A claim [[cite:nope]]."]);
+    expect(result.sentences.filter((s) => s.status === "invalid" && !hard(s)).map((s) => s.sentence)).toEqual([
+      "The test data is kept private so models cannot overfit it [[cite:e1]].",
+    ]);
   });
 });
