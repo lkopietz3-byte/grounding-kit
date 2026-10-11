@@ -15,6 +15,15 @@ type CodexCase = {
 };
 
 const CJK_CLOSERS = ["」", "』", "）", "〕", "】", "》", "〉", "＂", "＇", '"', "'", ")"];
+// 401409e review: a custom marker that ends with its own terminator, then an
+// invisible character, then a new sentence. Every terminator kind (ASCII,
+// spaced non-ASCII, CJK) and every invisible character the spacing step
+// handles.
+const MARKER_TERMINATORS = [".", "!", "?", "…", "。", "！", "？"];
+const INVISIBLES = [
+  "\u200b", "\u200c", "\u200d", "\u2060", "\u00ad", "\u061c", "\u200e",
+  "\u202e", "\u2066", "\u2069", "\ufe0f", "\u034f", "\u3164",
+];
 const WESTERN_CLOSERS = ['"', "'", "”", "’", ")", "»", "**"];
 
 export const CODEX_CASES: CodexCase[] = [
@@ -88,6 +97,30 @@ export const CODEX_CASES: CodexCase[] = [
     ev: { e: "Battery provides reliable portable power throughout outdoor camping" },
     text: "Battery provides reliable portable power throughout outdoor camping [[e]][[missing. X]].",
     config: { markerPattern: /\[\[([^\]]+)\]\]/g },
+  },
+  ...MARKER_TERMINATORS.flatMap((terminator) =>
+    INVISIBLES.map((invisible) => ({
+      id: `CX4-marker-ends-${terminator}-then-U+${invisible.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`,
+      kind: "launder" as const,
+      ev: { e: "the battery lasts 14 hours on a full charge" },
+      text: `The battery lasts 14 hours on a full charge {{e}}${terminator}${invisible}Prices doubled.`,
+      config: { markerPattern: /\{\{(\w+)\}\}[.!?…。！？]/g },
+    })),
+  ),
+  // 401409e review (markdown: true): a fence opener that carries a citation.
+  {
+    id: "CX4-md-fence-opener-cited-body-cited",
+    kind: "launder",
+    ev: { e: "the battery lasts 14 hours on a full charge" },
+    text: "```text [[cite:missing]]\nThe battery lasts 14 hours on a full charge [[cite:e]].\n```",
+    config: { markdown: true },
+  },
+  {
+    id: "CX4-md-fence-opener-cited-body-uncited",
+    kind: "launder",
+    ev: {},
+    text: "```text [[cite:missing]]\nnpm install laptop-x\n```",
+    config: { markdown: true },
   },
   {
     id: "CX2-md-fence-placeholder-and-unknown",
