@@ -88,7 +88,9 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   ratio check, adds an absolute CPU budget for the large classified document,
   tightens the repeated-id budget (5,000 to 1,000 ms), and includes a
   meta-check that the harness flags a quadratic function. On a heavily loaded
-  machine the wall-clock version failed with an unchanged library.
+  machine the wall-clock version failed with an unchanged library. The three
+  wall-clock checks in `test/robustness.test.ts` moved to CPU time the same
+  way (same 500 ms budget, now CPU, plus an 8x growth check each).
 
 ### Added
 
