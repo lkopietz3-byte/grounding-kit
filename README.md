@@ -231,7 +231,7 @@ in a narrow context:
 | `Gov.`, `Sen.`, `Mt.`, `Lt.`, `Sgt.`, `Capt.`, `Messrs.` | a capitalized word that is not a sentence opener, with the title written capitalized | `Gov. Rivera signed it.` |
 | `Ph.D.`, `M.D.`, `U.K.`, `E.U.`, `plc`, `cf.`, `viz.` | lower case | `a Ph.D. in chemistry` |
 | `est.`, `ca.` | lower case, or a number of 3 or more digits | `ca. 1900` |
-| `Jan.` ... `Dec.`, `Sept.` | a day (1 to 31) followed by a comma (not a digit group such as `5,000`), a year or the end; `5.5`, `5%` and `5th` end the sentence | `Jan. 5, 2024` |
+| `Jan.` ... `Dec.`, `Sept.` | a day (1 to 31) followed by a year (with or without a comma), a terminator, `;`, `)` or the end; a comma without a year, `5,000`, `5.5`, `5%` and `5th` end the sentence | `Jan. 5, 2024` |
 | `a.m.`, `p.m.` (also the 0.2.1 rule) | a time-zone code (`ET`, `PT`, `UTC`, ...) | `9 a.m. ET` |
 | any word except `no` | anything not marker-led, when the abbreviation is the whole fragment | `Sr. García reviewed it.` |
 

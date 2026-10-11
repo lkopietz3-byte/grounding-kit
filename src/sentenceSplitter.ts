@@ -529,11 +529,14 @@ function contextFuses(word: string, written: string, standalone: boolean, lead: 
     return true;
   }
   if (MONTH_WORDS.has(word)) {
-    // "Jan. 5, 2024" or "Jan. 5 2024": a day number from 1 to 31, then a
-    // comma that does not start a digit group, a year or the end. "Sept. 9
-    // of 10 users", "Jan. 5,000 devices", "Jan. 5.5", "Jan. 5%" and "Jan.
-    // 5th" all start a new sentence (an ordinal fails safe).
-    const day = /^(\d{1,2})(?:\s*,(?!\d)|\s*\)|\s+\d{4}(?![\d.,])|\s*$)/.exec(t);
+    // "Jan. 5, 2024", "Jan. 5 2024." or "Jan. 5.": a day number from 1 to
+    // 31, then a year (with or without a comma, followed by anything but more
+    // digits), a terminator, ";" or ")" that does not start a number, or the
+    // end. A comma after the day joins only before a year: "Sept. 9, 10 users
+    // renewed..." would otherwise join an uncited sentence to a cited one.
+    // "Sept. 9 of 10 users", "Jan. 5,000", "Jan. 5.5", "Jan. 5%" and "Jan.
+    // 5th" all start a new sentence (they fail safe).
+    const day = /^(\d{1,2})(?:\s*[.;!?)](?!\d)|,?\s+\d{4}(?!\d|[.,]\d)|,\d{4}(?!\d|[.,]\d)|\s*$)/.exec(t);
     return day !== null && Number(day[1]) >= 1 && Number(day[1]) <= 31;
   }
   if (LOWER_ONLY_WORDS.has(word)) return startsLower(t);
@@ -869,6 +872,7 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
   }
   const inFence = new Uint8Array(lines.length);
   const fenceBlocks = new Map<number, string>();
+  const fenceDelimiters = new Set<number>();
   for (let i = 0; i < lines.length; i++) {
     const f = fences[i];
     if (f === null || longestAfter[f.char as "`" | "~"][i + 1] < f.length) continue;
@@ -885,6 +889,10 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
     if (!cited) {
       inFence.fill(1, i, j + 1);
       fenceBlocks.set(i, lines.slice(i, j + 1).join("\n"));
+    } else {
+      // The delimiters are still scaffolding; only the contents are judged.
+      fenceDelimiters.add(i);
+      fenceDelimiters.add(j);
     }
     i = j;
   }
@@ -909,6 +917,11 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
     const kind = kinds[i];
     if (kind === "blank") {
       flush();
+      continue;
+    }
+    if (fenceDelimiters.has(i)) {
+      flush();
+      nonClaims.push(line.trim());
       continue;
     }
     if (isAlwaysScaffolding(line, kind)) {
@@ -1130,6 +1143,61 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
   return units;
 }
 
+// The ranges a sentence boundary may never fall inside: every recognized
+// marker and placeholder, with the default or a custom pattern. A marker id
+// such as `[[missing."X]]` must reach classification whole, or its unknown id
+// would vanish.
+interface Ranges {
+  starts: number[];
+  // maxEnd[k] is the largest end among the first k ranges (sorted by start).
+  maxEnd: Int32Array;
+}
+
+function protectedRanges(text: string, resolved: ResolvedSplitter): Ranges {
+  const ranges: Array<[number, number]> = [];
+  for (const m of scanMarkers(text, resolved.marker)) ranges.push([m.index, m.index + m[0].length]);
+  for (const m of scanPlaceholders(text, resolved.placeholderGlobal)) ranges.push([m.index, m.index + m[0].length]);
+  ranges.sort((x, y) => x[0] - y[0]);
+  const maxEnd = new Int32Array(ranges.length + 1);
+  for (let i = 0; i < ranges.length; i++) maxEnd[i + 1] = Math.max(maxEnd[i], ranges[i][1]);
+  return { starts: ranges.map((r) => r[0]), maxEnd };
+}
+
+// Whether `offset` lies strictly inside a protected range: some range starts
+// before it and ends after it.
+function insideRange(ranges: Ranges, offset: number): boolean {
+  let lo = 0;
+  let hi = ranges.starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges.starts[mid] < offset) lo = mid + 1;
+    else hi = mid;
+  }
+  return ranges.maxEnd[lo] > offset;
+}
+
+// `text` split at every sentence boundary that is not inside a protected
+// range. Otherwise the same as `text.split(SENTENCE_BOUNDARY)`, including its
+// rule that an empty match at the current start or at the end does not split.
+function splitOutsideRanges(text: string, ranges: Ranges): string[] {
+  const re = new RegExp(SENTENCE_BOUNDARY.source, "gu");
+  const parts: string[] = [];
+  let last = 0;
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    const empty = m[0].length === 0;
+    if (empty) {
+      const cp = text.codePointAt(m.index);
+      re.lastIndex = m.index + (cp !== undefined && cp > 0xffff ? 2 : 1);
+    }
+    if (empty && (m.index === last || m.index >= text.length)) continue;
+    if (insideRange(ranges, m.index)) continue;
+    parts.push(text.slice(last, m.index));
+    last = m.index + m[0].length;
+  }
+  parts.push(text.slice(last));
+  return parts;
+}
+
 /** @internal The units of a document, plus the markdown scaffolding set aside as non-claims. */
 export interface SplitResult {
   units: string[];
@@ -1161,9 +1229,12 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
     // closers) would keep the boundary regex from seeing "terminator,
     // whitespace" and fuse two sentences without a visible trace. A real
     // space in front of it restores the boundary.
-    const separated = block.replace(TERMINATOR_THEN_INVISIBLE, "$1 ");
+    const blockRanges = protectedRanges(block, resolved);
+    const separated = block.replace(TERMINATOR_THEN_INVISIBLE, (match: string, run: string, offset: number) =>
+      insideRange(blockRanges, offset) ? match : `${run} `,
+    );
     const normalized = normalizeMarkerAdjacency(separated, resolved);
-    const parts = normalized.split(SENTENCE_BOUNDARY);
+    const parts = splitOutsideRanges(normalized, protectedRanges(normalized, resolved));
     let buffer = "";
     for (let i = 0; i < parts.length; i++) {
       buffer = buffer ? `${buffer} ${parts[i]}` : parts[i];

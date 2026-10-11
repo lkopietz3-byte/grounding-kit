@@ -83,6 +83,14 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   `markdown: true`, a fenced block that carries a citation is no longer set
   aside. One id cited in many separate groups is checked once per sentence
   (8,000 occurrences: about 560 ms on 2042351, about 30 ms now).
+- **Review of 9ca1177.** No sentence boundary falls inside a recognized
+  marker or placeholder, with the default or a custom pattern, so an id such
+  as `[[missing."X]]` reaches classification whole. A full date followed by
+  punctuation (`Jan. 5 2024.`, `Jan. 5, 2024, and ...`) stays one sentence;
+  after a day alone, a comma joins only before a year (`Sept. 9, 10 users
+  renewed ...` is two sentences). With `markdown: true`, a cited fenced block
+  keeps its delimiters (with or without an info string) as scaffolding while
+  its contents are judged.
 - **Timing tests measure CPU time.** `test/scaling.test.ts` now measures the
   CPU time of the test process instead of wall-clock time, keeps every growth
   ratio check, adds an absolute CPU budget for the large classified document,
