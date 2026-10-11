@@ -442,7 +442,9 @@ text after it. With the default matcher, "fully" means the span has at least
 one content word and every content word appears in that id's evidence, and
 every number appears there as the same written value (sign, currency,
 decimal and grouping separators, percent: `$99.18` is not `$18.99`, `15%` is
-not `15`). With a custom `supports`, it means the span has at least
+not `15`; digits of other scripts are compared as written), as must every
+word holding a numeric character (`x1` is not `y1`, `m²` is not `m³`).
+Numbers inside URLs and link targets are ignored on both sides. With a custom `supports`, it means the span has at least
 three content words and `supports(span, evidence)` is true.
 
 So the span rule can only add passes, never take one away from 0.2.1:

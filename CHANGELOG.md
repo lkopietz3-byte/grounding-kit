@@ -121,6 +121,12 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   heading or a symbol-only line that was set aside. The config-time
   whitespace check no longer refuses negated classes such as `[^\s]`; when
   the source is not clear, the runtime check on real matches decides.
+- **Review of 9898ba4.** The span rule now applies two number guards, both
+  required: every whole written number (digits of any script, read after URLs
+  and markdown link targets are removed) and every normalized word holding a
+  numeric character (`x1`, `١٥`, `m²`) must appear in the evidence. Digits are
+  not folded across scripts, which can only cost a span pass. A number inside
+  a URL or link target is no longer read as a claim or evidence number.
 - **Timing tests measure CPU time.** `test/scaling.test.ts` now measures the
   CPU time of the test process instead of wall-clock time, keeps every growth
   ratio check, adds an absolute CPU budget for the large classified document,

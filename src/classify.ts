@@ -183,28 +183,49 @@ interface PreparedClaim {
   // Every number as written (sign, currency, digits with their separators,
   // percent); the span rule requires each one, as a whole value.
   numbers: Set<string>;
+  // Every normalized word holding a numeric character ("x1", "١٥", "m²"); the
+  // span rule also requires each one, so a different identifier, script or
+  // superscript cannot slip by.
+  digitTokens: Set<string>;
 }
 
-// A complete number read from the raw text, before normalization drops its
-// punctuation: optional sign, optional currency symbol, digits with decimal or
-// grouping separators, optional percent. "$99.18" and "$18.99" stay distinct.
-const NUMBER = /[-+\u2212]?[$€£¥]?\d+(?:[.,]\d+)*%?/gu;
+// A complete number read from the text, after URLs and markdown link targets
+// are removed (as for the word comparison) but before normalization drops its
+// punctuation: optional sign, optional currency symbol, digits of any script
+// with decimal or grouping separators, optional percent. "$99.18" and
+// "$18.99" stay distinct. Digits are compared as written, not folded across
+// scripts: "15" and "١٥" do not match, which can only cost a span pass.
+const NUMBER = /[-+\u2212]?[$€£¥]?\p{Nd}+(?:[.,]\p{Nd}+)*%?/gu;
 
 function numbersIn(text: string): Set<string> {
   const out = new Set<string>();
-  for (const m of text.normalize("NFC").matchAll(NUMBER)) out.add(m[0].replace("\u2212", "-"));
+  const cleaned = dropLinkTargets(text.normalize("NFC")).replace(/\b(?:https?|ftp):\/\/\S+/gi, " ");
+  for (const m of cleaned.matchAll(NUMBER)) out.add(m[0].replace("\u2212", "-"));
   return out;
 }
+
+// Any numeric character (digits of every script, superscripts such as "²",
+// numeral letters): the token guard is deliberately broad.
+const HAS_NUMERIC_CHAR = /\p{N}/u;
 
 function prepareClaim(text: string): PreparedClaim {
   const normalized = normalizeForOverlap(text);
   const significant = new Set<string>();
   const required = new Set<string>();
+  const digitTokens = new Set<string>();
   for (const t of tokenize(normalized)) {
     if (t.significant) significant.add(t.text);
     if (t.required) required.add(t.text);
+    if (HAS_NUMERIC_CHAR.test(t.text)) digitTokens.add(t.text);
   }
-  return { padded: ` ${normalized} `, length: normalized.length, significant, required, numbers: numbersIn(text) };
+  return {
+    padded: ` ${normalized} `,
+    length: normalized.length,
+    significant,
+    required,
+    numbers: numbersIn(text),
+    digitTokens,
+  };
 }
 
 /** Evidence normalized once per classification call. */
@@ -480,9 +501,12 @@ function citationGroups(sentence: string, claimText: string, splitter: ResolvedS
 // the 60% the whole-sentence check allows.
 function fullyCovers(span: PreparedClaim, evidence: PreparedEvidence): boolean {
   if (span.significant.size < MIN_SPAN_WORDS) return false;
-  // Numbers are compared as whole values first: whole-word containment of the
-  // normalized text would read "$99.18" and "99 18" alike.
+  // Two number guards, both required, checked before anything else: every
+  // whole written number (whole-word containment of the normalized text would
+  // read "$99.18" and "99 18" alike), and every normalized word that holds a
+  // digit ("x1" is not "y1"), must appear in the evidence.
   for (const n of span.numbers) if (!evidence.numbers.has(n)) return false;
+  for (const t of span.digitTokens) if (!evidence.tokens.has(t)) return false;
   if (span.length <= evidence.length && evidence.padded.includes(span.padded)) return true;
   for (const w of span.required) if (!evidence.tokens.has(w)) return false;
   for (const w of span.significant) if (!evidence.tokens.has(w)) return false;
