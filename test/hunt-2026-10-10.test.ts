@@ -300,3 +300,32 @@ We could not verify the exact refund processing time [citation needed].
     ]);
   });
 });
+
+describe("401409e review: protected ranges are tested where the cut happens", () => {
+  it("keeps a boundary right after a marker that ends in its own terminator", () => {
+    const markerPattern = /\{\{(\w+)\}\}[.!?]/g;
+    expect(splitSentences("Claim one {{a}}.​Claim two.", { markerPattern })).toEqual([
+      "Claim one {{a}}.",
+      "​Claim two.",
+    ]);
+  });
+
+  it("never splits inside a marker that holds a period and a space", () => {
+    const markerPattern = /\[\[([^\]]+)\]\]/g;
+    expect(splitSentences("Claim [[a. B]] more.", { markerPattern })).toEqual(["Claim [[a. B]] more."]);
+  });
+
+  it("splits after a marker whose pattern swallows trailing whitespace", () => {
+    const markerPattern = /\{\{(\w+)\}\}\. /g;
+    expect(splitSentences("Claim one {{a}}.  Claim two.", { markerPattern })).toEqual([
+      "Claim one {{a}}. ",
+      "Claim two.",
+    ].map((u) => u.trim()));
+  });
+
+  it("does not let a cited dash run eat into a marker that starts with dashes", () => {
+    const markerPattern = /(--\w+--)/g;
+    const units = splitSentences("Claim --a-- then more --b--.", { markerPattern });
+    expect(units.join(" ")).toContain("--b--");
+  });
+});

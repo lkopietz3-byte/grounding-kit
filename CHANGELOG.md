@@ -91,6 +91,14 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   renewed ...` is two sentences). With `markdown: true`, a cited fenced block
   keeps its delimiters (with or without an info string) as scaffolding while
   its contents are judged.
+- **Review of 401409e.** The invisible-character spacing step checks the
+  point where it inserts its space, not the terminator, so a custom marker
+  that ends in its own terminator (`{{e}}.`) followed by a zero-width
+  character still ends the sentence. A boundary's whitespace may not cut
+  into a marker or placeholder (it splits after the range instead), and a
+  cited dash run stops before one. With `markdown: true`, a fence delimiter
+  that carries a marker or placeholder (```` ```text [[cite:x]] ````) is
+  judged, and such a citation keeps the whole block from being set aside.
 - **Timing tests measure CPU time.** `test/scaling.test.ts` now measures the
   CPU time of the test process instead of wall-clock time, keeps every growth
   ratio check, adds an absolute CPU budget for the large classified document,

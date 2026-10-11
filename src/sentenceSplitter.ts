@@ -884,15 +884,18 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
     // A block that carries a citation marker or placeholder is not set
     // aside: its citations must still be judged (an unknown id inside it has
     // to make the document unclean). Its lines are read as ordinary lines.
+    // The opener's info string counts too: "```text [[cite:x]]" carries a
+    // citation that must be judged.
     let cited = false;
-    for (let k = i + 1; k < j && !cited; k++) cited = carriesCitation(lines[k], resolved);
+    for (let k = i; k <= j && !cited; k++) cited = carriesCitation(lines[k], resolved);
     if (!cited) {
       inFence.fill(1, i, j + 1);
       fenceBlocks.set(i, lines.slice(i, j + 1).join("\n"));
     } else {
-      // The delimiters are still scaffolding; only the contents are judged.
-      fenceDelimiters.add(i);
-      fenceDelimiters.add(j);
+      // A delimiter that carries nothing is still scaffolding; one that
+      // carries a marker or placeholder is judged like the contents.
+      if (!carriesCitation(lines[i], resolved)) fenceDelimiters.add(i);
+      if (!carriesCitation(lines[j], resolved)) fenceDelimiters.add(j);
     }
     i = j;
   }
@@ -1124,8 +1127,15 @@ function splitGroundingUnits(sentence: string, resolved: ResolvedSplitter): stri
         // An en dash between digits is a range ("2020–2025"), never a break.
         if (!(isDigit(sentence[i - 1]) && isDigit(sentence[i + 1]))) width = 1;
       } else if (ch === "-") {
+        // The run is consumed as the separator, so it stops before any
+        // shielded position: it may never eat into a marker or placeholder.
         let run = 1;
-        while (sentence[i + run] === "-") run++;
+        let ahead = depth;
+        while (sentence[i + run] === "-") {
+          ahead += cover[i + run];
+          if (ahead > 0) break;
+          run++;
+        }
         if (run >= 2) width = run;
         else if (isSpace(sentence[i - 1]) && isSpace(sentence[i + 1])) width = 1;
       }
@@ -1163,17 +1173,25 @@ function protectedRanges(text: string, resolved: ResolvedSplitter): Ranges {
   return { starts: ranges.map((r) => r[0]), maxEnd };
 }
 
-// Whether `offset` lies strictly inside a protected range: some range starts
-// before it and ends after it.
-function insideRange(ranges: Ranges, offset: number): boolean {
+// The largest end among protected ranges that start before `position`.
+function coveredUntil(ranges: Ranges, position: number): number {
   let lo = 0;
   let hi = ranges.starts.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (ranges.starts[mid] < offset) lo = mid + 1;
+    if (ranges.starts[mid] < position) lo = mid + 1;
     else hi = mid;
   }
-  return ranges.maxEnd[lo] > offset;
+  return ranges.maxEnd[lo];
+}
+
+// Whether cutting out [from, to) (an empty cut when from === to) would cut
+// into a protected range: some range starts before `to` and ends after
+// `from`. For an empty cut that means the position is strictly inside one.
+function cutsRange(ranges: Ranges, from: number, to: number): boolean {
+  // Empty cut: a range starts before the position and ends after it.
+  // Non-empty cut: a range starts before `to` and ends after `from`.
+  return coveredUntil(ranges, to === from ? from : to) > from;
 }
 
 // `text` split at every sentence boundary that is not inside a protected
@@ -1190,9 +1208,21 @@ function splitOutsideRanges(text: string, ranges: Ranges): string[] {
       re.lastIndex = m.index + (cp !== undefined && cp > 0xffff ? 2 : 1);
     }
     if (empty && (m.index === last || m.index >= text.length)) continue;
-    if (insideRange(ranges, m.index)) continue;
-    parts.push(text.slice(last, m.index));
-    last = m.index + m[0].length;
+    const from = m.index;
+    const to = m.index + m[0].length;
+    if (cutsRange(ranges, from, to)) {
+      // The boundary would remove or cut marker or placeholder text. When
+      // the whitespace runs on past every range it touches, cut after them
+      // instead, so the boundary is kept and the marker stays whole.
+      const end = coveredUntil(ranges, to);
+      if (!empty && end > from && end < to) {
+        parts.push(text.slice(last, end));
+        last = to;
+      }
+      continue;
+    }
+    parts.push(text.slice(last, from));
+    last = to;
   }
   parts.push(text.slice(last));
   return parts;
@@ -1230,8 +1260,12 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
     // whitespace" and fuse two sentences without a visible trace. A real
     // space in front of it restores the boundary.
     const blockRanges = protectedRanges(block, resolved);
+    // The space goes in right after the terminator and its closers, so that
+    // insertion point (not the terminator) is what must not be inside a
+    // marker or placeholder. A marker that ends in its own terminator
+    // ("{{e}}.") ends exactly there, so the boundary after it is kept.
     const separated = block.replace(TERMINATOR_THEN_INVISIBLE, (match: string, run: string, offset: number) =>
-      insideRange(blockRanges, offset) ? match : `${run} `,
+      cutsRange(blockRanges, offset + run.length, offset + run.length) ? match : `${run} `,
     );
     const normalized = normalizeMarkerAdjacency(separated, resolved);
     const parts = splitOutsideRanges(normalized, protectedRanges(normalized, resolved));
