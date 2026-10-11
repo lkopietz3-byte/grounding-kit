@@ -313,10 +313,11 @@ function assertNoEdgeWhitespace(match: string, index: number, label: string, re:
 
 // Config-time half of the edge-whitespace rule: a pattern whose source
 // visibly begins or ends (in any top-level alternative) with an atom that
-// matches whitespace (" ", "\s", "\t", "\n", "\r", or a class holding a
-// space or "\s"), with or without a quantifier, is refused before any text is
-// read. Anything subtler is caught by the runtime check on the first such
-// match.
+// certainly matches whitespace (" ", "\s", "\t", "\n", "\r", or a
+// non-negated class listing a space or "\s"), with or without a quantifier,
+// is refused before any text is read. When the source is not that clear
+// (groups, negated classes), nothing is refused here and the runtime check on
+// the first real match decides.
 function patternCanEdgeOnWhitespace(source: string): boolean {
   const alternatives: string[] = [];
   let depth = 0;
@@ -341,7 +342,10 @@ function patternCanEdgeOnWhitespace(source: string): boolean {
     }
   }
   alternatives.push(source.slice(start));
-  const ws = String.raw`(?: |\\s|\\t|\\n|\\r|\\f|\\v|\\x20|\\u0020|\[(?:[^\]\\]|\\.)*?(?: |\\s)(?:[^\]\\]|\\.)*\])`;
+  // A positive class that lists a space or \s counts; a negated class
+  // ("[^\s]", "[^\]]") is not decided here: it may or may not match
+  // whitespace, so the runtime check on real matches decides instead.
+  const ws = String.raw`(?: |\\s|\\t|\\n|\\r|\\f|\\v|\\x20|\\u0020|\[(?!\^)(?:[^\]\\]|\\.)*?(?: |\\s)(?:[^\]\\]|\\.)*\])`;
   const quantifier = String.raw`(?:[*+?]|\{\d+(?:,\d*)?\})?\??`;
   const leading = new RegExp(`^\\^?${ws}`);
   const trailing = new RegExp(`(?<!\\\\)${ws}${quantifier}\\$?$`);
@@ -908,7 +912,12 @@ function isAlwaysScaffolding(line: string, kind: LineKind): boolean {
  * lead-ins, table header rows and fenced code are set aside too, and
  * hard-wrapped lines are joined.
  */
-function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: string[]): string[] {
+function prepareBlocks(
+  text: string,
+  resolved: ResolvedSplitter,
+  nonClaims: string[],
+  afterVisible: boolean[],
+): string[] {
   // Default: lines end at "\n" only (a "\r\n" ending works too), as in 0.2.1.
   // A lone "\r" or U+2028/U+2029 also ends a line only with markdown: true,
   // because splitting there by default could turn an honest document that
@@ -919,7 +928,10 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
     const blocks: string[] = [];
     for (let i = 0; i < lines.length; i++) {
       if (kinds[i] !== "blank" && isAlwaysScaffolding(lines[i], kinds[i])) nonClaims.push(lines[i].trim());
-      else blocks.push(lines[i]);
+      else {
+        blocks.push(lines[i]);
+        afterVisible.push(nonClaims.length > 0);
+      }
     }
     return blocks;
   }
@@ -969,11 +981,17 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
   }
 
   const blocks: string[] = [];
+  // Whether visible scaffolding was set aside before each block: a marker
+  // after it is not at the start of the document.
+  const pushBlock = (block: string) => {
+    blocks.push(block);
+    afterVisible.push(nonClaims.length > 0);
+  };
   let current: string | null = null;
   let currentLastLine = "";
   let currentKind: LineKind | null = null;
   const flush = () => {
-    if (current !== null) blocks.push(current);
+    if (current !== null) pushBlock(current);
     current = null;
     currentKind = null;
   };
@@ -1012,12 +1030,12 @@ function prepareBlocks(text: string, resolved: ResolvedSplitter, nonClaims: stri
         (i === 0 || kinds[i - 1] !== "tableRow");
       if (header && !carriesCitation(line, resolved) && !holdsStatement(line.replace(/\|/g, " "))) {
         nonClaims.push(line.trim());
-      } else blocks.push(line);
+      } else pushBlock(line);
       continue;
     }
     if (kind === "heading") {
       flush();
-      if (headingIsClaim(line, resolved)) blocks.push(line);
+      if (headingIsClaim(line, resolved)) pushBlock(line);
       else nonClaims.push(line.trim());
       continue;
     }
@@ -1318,17 +1336,23 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
     const trimmed = raw.trim();
     if (isBlank(trimmed)) return;
     if (atBlockStart) blockStarts.add(sentences.length);
+    sentenceAfterVisible.push(currentAfterVisible);
     atBlockStart = false;
     sentences.push(trimmed);
   };
-  const blocks = prepareBlocks(text, resolved, nonClaims);
+  const blockAfterVisible: boolean[] = [];
+  const blocks = prepareBlocks(text, resolved, nonClaims, blockAfterVisible);
+  const sentenceAfterVisible: boolean[] = [];
   // Every marker as matched in the lines before any splitting or trimming.
   // The units must hold exactly these, in order (less any leading markers
   // dropped below), or a split or trim changed what a marker is.
   const expectedMarkers: string[] = [];
   for (const block of blocks) for (const m of scanMarkers(block, resolved.marker)) expectedMarkers.push(m[0]);
   let droppedMarkers = 0;
-  for (const block of blocks) {
+  let currentAfterVisible = false;
+  for (let b = 0; b < blocks.length; b++) {
+    const block = blocks[b];
+    currentAfterVisible = blockAfterVisible[b];
     atBlockStart = true;
     // A default-ignorable character right after a terminator (and its
     // closers) would keep the boundary regex from seeing "terminator,
@@ -1362,16 +1386,20 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
   // for a citation), it never launders.
   const units: string[] = [];
   const unitStartsBlock: boolean[] = [];
+  const unitAfterVisible: boolean[] = [];
   sentences.forEach((sentence, index) => {
     splitGroundingUnits(sentence, resolved).forEach((unit, k) => {
       units.push(unit);
       unitStartsBlock.push(k === 0 && blockStarts.has(index));
+      unitAfterVisible.push(sentenceAfterVisible[index]);
     });
   });
 
   // Reattach orphaned citation markers and placeholders to the unit they
   // belong to.
   const merged: string[] = [];
+  // Whether a symbol-only remainder was set aside before any unit was kept.
+  let visibleSetAside = false;
   for (let u = 0; u < units.length; u++) {
     const unit = units[u];
     const { peeled, rest } = peelLeading(unit, resolved);
@@ -1398,19 +1426,35 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
           if (LETTER_OR_DIGIT.test(rest)) merged.push(rest);
           else merged[merged.length - 1] = `${merged[merged.length - 1]}${rest}`;
         }
+      } else if (unitAfterVisible[u] || visibleSetAside) {
+        // No unit before them, but visible text was set aside earlier (a
+        // heading, a symbol-only line): they are not at the start of the
+        // document, so they are kept and judged on their own instead of
+        // being dropped.
+        // A placeholder among them still covers the text after it, as at the
+        // start of the document.
+        const group = peeled.map((item) => item.text).join(" ");
+        if (firstPlaceholder >= 0) merged.push(`${group} ${rest}`.trim());
+        else if (!isBlank(rest) && !LETTER_OR_DIGIT.test(rest)) merged.push(`${group}${rest}`);
+        else {
+          merged.push(group);
+          if (!isBlank(rest)) merged.push(rest);
+        }
       } else {
-        // Nothing before them. A marker grounds nothing and is dropped; from
-        // the first placeholder on, the unit is kept whole, so a gap marker
-        // written in front of its sentence still covers it. A remainder with
-        // no letter or digit is not a claim and is set aside.
+        // Nothing visible before them. A marker grounds nothing and is
+        // dropped; from the first placeholder on, the unit is kept whole, so
+        // a gap marker written in front of its sentence still covers it. A
+        // remainder with no letter or digit is not a claim and is set aside.
         const first = peeled.findIndex((item) => item.placeholder);
         droppedMarkers += first < 0 ? peeled.length : first;
         const kept = (
           first < 0 ? rest : [...peeled.slice(first).map((item) => item.text), rest].join(" ")
         ).trim();
         if (!isBlank(kept)) {
-          if (first < 0 && !LETTER_OR_DIGIT.test(kept)) nonClaims.push(kept);
-          else merged.push(kept);
+          if (first < 0 && !LETTER_OR_DIGIT.test(kept)) {
+            nonClaims.push(kept);
+            visibleSetAside = true;
+          } else merged.push(kept);
         }
       }
       continue;

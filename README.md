@@ -439,8 +439,10 @@ side by side with only spaces or punctuation between them), a citation is
 also accepted when it fully backs its own **span**: the text since the
 previous group (or the start of the sentence), plus, for the last group, any
 text after it. With the default matcher, "fully" means the span has at least
-one content word and every content word and every number in it appears in
-that id's evidence. With a custom `supports`, it means the span has at least
+one content word and every content word appears in that id's evidence, and
+every number appears there as the same written value (sign, currency,
+decimal and grouping separators, percent: `$99.18` is not `$18.99`, `15%` is
+not `15`). With a custom `supports`, it means the span has at least
 three content words and `supports(span, evidence)` is true.
 
 So the span rule can only add passes, never take one away from 0.2.1:
@@ -608,6 +610,7 @@ would change what the match is: a pattern whose source visibly begins or ends
 with whitespace (`/\{\{(\w+)\}\}\. /`, `/\s\[(\d+)\]/`, `/\[tbd\] ?/`) is
 refused before any text is read, and any other match that turns out to start
 or end with whitespace throws `GroundingConfigError` when it is found. A
+negated class such as `[^\s]` at an edge is fine. A
 marker pattern must also match the same text inside a sentence as in the
 whole document (a lookbehind such as `/(?<= )\[(\d+)\]/` does not, because a
 marker can start a sentence); if a marker would be lost or changed by

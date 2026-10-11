@@ -114,6 +114,13 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   counts when every content word and every number in it appears in its
   evidence (custom `supports`: three or more content words, as before). It
   still only adds passes.
+- **Review of 1eb99c9.** The span rule compares numbers as complete written
+  values read before normalization (sign, currency, separators, percent), so
+  `$99.18` no longer matches `$18.99`. A marker is dropped as
+  document-leading only when nothing visible came before it, including a
+  heading or a symbol-only line that was set aside. The config-time
+  whitespace check no longer refuses negated classes such as `[^\s]`; when
+  the source is not clear, the runtime check on real matches decides.
 - **Timing tests measure CPU time.** `test/scaling.test.ts` now measures the
   CPU time of the test process instead of wall-clock time, keeps every growth
   ratio check, adds an absolute CPU budget for the large classified document,

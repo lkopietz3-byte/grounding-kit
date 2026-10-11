@@ -180,21 +180,31 @@ interface PreparedClaim {
   length: number;
   significant: Set<string>;
   required: Set<string>;
-  // Every token holding a digit; the span rule requires all of them.
+  // Every number as written (sign, currency, digits with their separators,
+  // percent); the span rule requires each one, as a whole value.
   numbers: Set<string>;
+}
+
+// A complete number read from the raw text, before normalization drops its
+// punctuation: optional sign, optional currency symbol, digits with decimal or
+// grouping separators, optional percent. "$99.18" and "$18.99" stay distinct.
+const NUMBER = /[-+\u2212]?[$€£¥]?\d+(?:[.,]\d+)*%?/gu;
+
+function numbersIn(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.normalize("NFC").matchAll(NUMBER)) out.add(m[0].replace("\u2212", "-"));
+  return out;
 }
 
 function prepareClaim(text: string): PreparedClaim {
   const normalized = normalizeForOverlap(text);
   const significant = new Set<string>();
   const required = new Set<string>();
-  const numbers = new Set<string>();
   for (const t of tokenize(normalized)) {
     if (t.significant) significant.add(t.text);
     if (t.required) required.add(t.text);
-    if (HAS_DIGIT.test(t.text)) numbers.add(t.text);
   }
-  return { padded: ` ${normalized} `, length: normalized.length, significant, required, numbers };
+  return { padded: ` ${normalized} `, length: normalized.length, significant, required, numbers: numbersIn(text) };
 }
 
 /** Evidence normalized once per classification call. */
@@ -203,6 +213,7 @@ interface PreparedEvidence {
   length: number;
   tokens: Set<string>;
   significantCount: number;
+  numbers: Set<string>;
 }
 
 function prepareEvidence(text: string): PreparedEvidence {
@@ -213,6 +224,7 @@ function prepareEvidence(text: string): PreparedEvidence {
     length: normalized.length,
     tokens: new Set(all.map((t) => t.text)),
     significantCount: new Set(all.filter((t) => t.significant).map((t) => t.text)).size,
+    numbers: numbersIn(text),
   };
 }
 
@@ -468,9 +480,11 @@ function citationGroups(sentence: string, claimText: string, splitter: ResolvedS
 // the 60% the whole-sentence check allows.
 function fullyCovers(span: PreparedClaim, evidence: PreparedEvidence): boolean {
   if (span.significant.size < MIN_SPAN_WORDS) return false;
+  // Numbers are compared as whole values first: whole-word containment of the
+  // normalized text would read "$99.18" and "99 18" alike.
+  for (const n of span.numbers) if (!evidence.numbers.has(n)) return false;
   if (span.length <= evidence.length && evidence.padded.includes(span.padded)) return true;
   for (const w of span.required) if (!evidence.tokens.has(w)) return false;
-  for (const w of span.numbers) if (!evidence.tokens.has(w)) return false;
   for (const w of span.significant) if (!evidence.tokens.has(w)) return false;
   return true;
 }
