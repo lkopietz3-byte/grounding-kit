@@ -1,5 +1,5 @@
 {
- "source": "grounding-kit@0.2.1 from npm, default options",
+ "source": "grounding-kit@0.2.1 (published package; verdicts re-recorded from the 0.2.1 release source), default options unless a case sets markerPattern",
  "hunter": {
   "L01-heading-claim": false,
   "L02-heading-full-sentence": false,
@@ -129,6 +129,8 @@
   "CX2-month-percent": false,
   "CX2-month-ordinal": false,
   "CX2-md-fence-unknown-id": false,
+  "CX3-custom-marker-holds-closer-capital": false,
+  "CX3-custom-marker-holds-period-space": false,
   "CX2-md-fence-placeholder-and-unknown": false
  },
  "table": {
@@ -294,6 +296,13 @@
   "review 2042351: a month before a thousands number ends a sentence": false,
   "review 2042351: a month before an ordinal ends a sentence (fails safe)": false,
   "md: a fenced block that carries a citation is a claim": false,
+  "review 9ca1177: a placeholder holding a period and a quote is not split": true,
+  "review 9ca1177: a full date before a period stays one sentence": false,
+  "review 9ca1177: a month, day and comma without a year ends a sentence (fails safe)": false,
+  "self-hunt 9ca1177: a day and a comma do not join an uncited sentence": false,
+  "self-hunt 9ca1177: a full date with a comma before more text stays one sentence": false,
+  "md: a cited fence with an info string keeps its delimiters as scaffolding": false,
+  "md: a cited fence with an unknown id is still flagged": false,
   "limit: conversational filler counts as an uncited sentence": false
  }
 }

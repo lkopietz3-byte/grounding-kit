@@ -42,6 +42,17 @@ describe("gate: no new false passes and no honest regressions against 0.2.1 (def
     expect(missed).toEqual([]);
   });
 
+  it("Codex review documents with a custom marker pattern that 0.2.1 flagged stay flagged", () => {
+    const hits = CODEX_CASES.filter(
+      (c) =>
+        c.config?.markerPattern !== undefined &&
+        c.config.markdown === undefined &&
+        v021.codex[c.id] === false &&
+        classifyDocument(c.text, c.ev, c.config).isClean,
+    ).map((c) => c.id);
+    expect(hits).toEqual([]);
+  });
+
   it("Codex review documents that 0.2.1 flagged stay flagged under default options", () => {
     const hits = CODEX_CASES.filter(
       (c) => c.config === undefined && v021.codex[c.id] === false && cleanByDefault(c.text, c.ev),

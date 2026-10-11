@@ -1,14 +1,17 @@
-// Documents from the Codex reviews of 2662560 and 2042351 (2026-10-10). Every
-// one contains an uncited or unsupported claim, so isClean must be false.
-// Cases without `config` are checked under default options (the release
-// gate); cases with `config` are checked under that config.
+// Documents from the Codex reviews of 2662560, 2042351 and 9ca1177
+// (2026-10-10). Every one contains an uncited or unsupported claim, so
+// isClean must be false. Cases without `config` are checked under default
+// options (the release gate); cases with `config` are checked under that
+// config, and against 0.2.1 under the same config when 0.2.1 had the options.
+
+import type { ClassifyConfig } from "../../src/index.js";
 
 type CodexCase = {
   id: string;
   kind: "launder";
   ev: Record<string, string>;
   text: string;
-  config?: { markdown: boolean };
+  config?: ClassifyConfig;
 };
 
 const CJK_CLOSERS = ["」", "』", "）", "〕", "】", "》", "〉", "＂", "＇", '"', "'", ")"];
@@ -69,6 +72,22 @@ export const CODEX_CASES: CodexCase[] = [
     ev: {},
     text: "```\nClaim [[cite:missing]].\n```",
     config: { markdown: true },
+  },
+  // 9ca1177 review, P2: a sentence boundary must never fall inside a
+  // recognized marker (here a custom pattern whose id holds `."X`).
+  {
+    id: "CX3-custom-marker-holds-closer-capital",
+    kind: "launder",
+    ev: { e: "Battery provides reliable portable power throughout outdoor camping" },
+    text: 'Battery provides reliable portable power throughout outdoor camping [[e]][[missing."X]] [TK].',
+    config: { markerPattern: /\[\[([^\]]+)\]\]/g },
+  },
+  {
+    id: "CX3-custom-marker-holds-period-space",
+    kind: "launder",
+    ev: { e: "Battery provides reliable portable power throughout outdoor camping" },
+    text: "Battery provides reliable portable power throughout outdoor camping [[e]][[missing. X]].",
+    config: { markerPattern: /\[\[([^\]]+)\]\]/g },
   },
   {
     id: "CX2-md-fence-placeholder-and-unknown",
