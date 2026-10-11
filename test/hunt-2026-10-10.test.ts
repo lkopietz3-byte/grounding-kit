@@ -404,3 +404,16 @@ describe("README recipes", () => {
     ]);
   });
 });
+
+describe("1eb99c9 review: negated classes are not whitespace at a pattern edge", () => {
+  it("accepts a pattern that starts and ends with a negated whitespace class", () => {
+    const markerPattern = /[^\s](\d+)[^\s]/g;
+    expect(() => splitSentences("Claim x1y here.", { markerPattern })).not.toThrow();
+    expect(() => classifyDocument("Claim x1y here.", { "1": "claim here" }, { markerPattern })).not.toThrow();
+  });
+
+  it("still refuses a pattern whose real match ends with whitespace", () => {
+    const markerPattern = /\[(\d+)\][^\]x]/g;
+    expect(() => classifyDocument("Claim [1] here.", { "1": "claim here" }, { markerPattern })).toThrow(GroundingConfigError);
+  });
+});
