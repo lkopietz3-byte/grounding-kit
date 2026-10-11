@@ -427,6 +427,16 @@
   "span numbers: decimal vs integer, matching value passes": false,
   "review 1eb99c9: a symbol-only unit does not make the next marker document-leading": false,
   "md: a heading does not make the next marker document-leading": false,
+  "span numbers: Arabic-Indic digit swap does not pass": false,
+  "span numbers: Arabic-Indic digits, matching value passes": false,
+  "span numbers: Devanagari digit swap does not pass": false,
+  "span numbers: an identifier with a different letter does not pass": false,
+  "span numbers: an identifier, matching value passes": false,
+  "span numbers: a number only inside an evidence URL does not pass": false,
+  "span numbers: a number only inside an evidence link target does not pass": false,
+  "span numbers: a number inside a claim URL is not a claim number": false,
+  "span numbers: a number inside a claim link target is not a claim number": false,
+  "span numbers: a different superscript does not pass": false,
   "limit: conversational filler counts as an uncited sentence": false
  }
 }
