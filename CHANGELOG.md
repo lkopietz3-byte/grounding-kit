@@ -83,6 +83,12 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   `markdown: true`, a fenced block that carries a citation is no longer set
   aside. One id cited in many separate groups is checked once per sentence
   (8,000 occurrences: about 560 ms on 2042351, about 30 ms now).
+- **Timing tests measure CPU time.** `test/scaling.test.ts` now measures the
+  CPU time of the test process instead of wall-clock time, keeps every growth
+  ratio check, adds an absolute CPU budget for the large classified document,
+  tightens the repeated-id budget (5,000 to 1,000 ms), and includes a
+  meta-check that the harness flags a quadratic function. On a heavily loaded
+  machine the wall-clock version failed with an unchanged library.
 
 ### Added
 

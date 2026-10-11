@@ -638,8 +638,10 @@ function.
   capitalized word (`We hired Agent K. Prices doubled.` is one sentence),
   and `no.` before a number is read as "number" (`The answer is no. 3 people
   disagreed.` is one sentence). Common abbreviations before a capital split
-  mid-sentence (`the U.S. Department of Energy`, `e.g. Apple`), which fails
-  safe. When in doubt it fails toward *more* (smaller) units.
+  mid-sentence (`the U.S. Department of Energy`, `e.g. Apple`), and so does a
+  month before an ordinal day (`It shipped on Jan. 5th to stores.` is two
+  units; write `Jan. 5, 2024` or `January 5th`), which fails safe. When in
+  doubt it fails toward *more* (smaller) units.
 - **`markdown: true` does not check scaffolding.** A heading, short bold
   line, table header, lead-in or wrapped line that holds no statement and
   carries no marker is set aside even if it makes a claim (`## Prices doubled
