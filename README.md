@@ -2,47 +2,56 @@
 
 **[Try it in your browser →](https://lkopietz3-byte.github.io/honesty-kits/#grounding-kit)** · Part of [honesty kits](https://github.com/lkopietz3-byte/honesty-kits), a family of small checks for the claims an AI product makes.
 
-Deterministic, zero-runtime-dependency citation-grounding checker for
-AI-generated text. Splits generated text into sentences and classifies each
-one as `grounded`, `placeholder`, `ungrounded`, or `invalid` against a map of
-the evidence you actually gave the model, so you can catch an uncited claim,
-an honest "no source" gap, or a citation that points at nothing (or at
-evidence that doesn't back the sentence) before it ships to a user.
+A structural citation gate for AI answers that carry inline citation ids.
+Give it the answer text and the evidence you gave the model (a map from id to
+text), and it reports, sentence by sentence, which claims are uncited, which
+cite an id you never provided, and which cite evidence that does not line up
+with the sentence. No model calls, no network access, zero runtime
+dependencies; same input, same output.
 
-No LLM calls, no network access, no embeddings required to run (though you
-can plug one in). Pure string/regex logic, framework-agnostic, works in any
-JS/TS runtime.
+**Who it is for:** teams whose generator already writes inline markers such
+as `[[cite:e1]]` (RAG answer engines, report drafters, summarizers) and want a
+free, fast check in CI or before an answer ships.
 
-## Why this exists
+**The job it does well:** the structural checks. In a field trial on real
+source-and-summary pairs, every planted uncited sentence, unknown id and
+wrong-chunk citation was caught, and an uncited sentence cannot ride a
+neighbor's citation (after a period, a closing quote, an abbreviation, a dash
+or a semicolon).
 
-If your product generates text with inline citations (a summarizer, a
-report drafter, a RAG answer engine, anything that emits `"claim [[cite:e1]]"`),
-you have two independent failure modes to catch before the text ships:
+**What it does not do:** decide whether a sentence is true to its source. The
+built-in `supports()` check is lexical word overlap. In the same trial it
+flagged about 4 in 10 honest paraphrases and passed about 4 in 10 one-word
+content edits (a changed number, an inserted "not"). Plug in your own
+`supports()` (an embedding, NLI or number-aware check) for the semantic step,
+and treat the default `not-supported` verdict as a review flag for
+paraphrase-heavy output; see "Recipes" below.
 
-1. **The claim is unsupported.** No citation at all, or an honest
-   `[citation needed]`-style placeholder standing in for one.
-2. **The citation doesn't hold up.** A marker is present and *looks* like
-   grounding, but it points at an id that doesn't exist (a citation to
-   nothing), or at evidence that doesn't say what the sentence claims. This
-   is worse than an unsupported claim, because it reads as authoritative.
+## How it works
 
-An LLM-judge approach asks a model whether an answer seems grounded in
-retrieved context. That can judge meaning, but every check costs a model call
-(money, latency, and answers that can vary between runs). This library does
-something narrower and more mechanical: it checks whether a citation
-**marker** in a piece of text points to the actual **evidence span** that is
-supposed to support that sentence, using a deterministic (non-LLM) parser. It
-never decides whether the evidence is true or whether the sentence follows
-from it.
+The generator writes a marker after each claim it can back, or a placeholder
+such as `[citation needed]` where it cannot. grounding-kit splits the answer
+into sentence-level units, keeps each marker on the unit it belongs to, and
+classifies every unit:
 
-A related but different problem is checking the citations themselves:
-[CiteCheck (arXiv 2605.27700)](https://arxiv.org/abs/2605.27700) checks
-whether cited scholarly works exist and whether their metadata is faithful.
-This library does not look anything up. It is a fast, free, offline first pass
-that catches a specific, mechanical, and surprisingly common failure: a
-citation marker sitting on the wrong sentence, or pointing at nothing.
+1. **`ungrounded`**: no citation at all.
+2. **`placeholder`**: an honest "no source" gap.
+3. **`invalid`**: a citation to an id that is not in your evidence map (a
+   hard failure), or to evidence that the `supports()` check does not accept
+   for that sentence (with the default matcher, a lead for review).
+4. **`grounded`**: every citation exists and was accepted.
 
-Run it before an LLM judge, not instead of one, if your stakes justify both.
+An LLM judge can weigh meaning but costs a model call per check. This library
+does the narrower, mechanical part for free and runs first; run a semantic
+check after it if your stakes justify both. It never decides whether the
+evidence itself is true, and it does not look anything up (see
+[CiteCheck, arXiv 2605.27700](https://arxiv.org/abs/2605.27700) for checking
+that cited works exist).
+
+For best results, prompt the generator to put one claim per sentence and a
+marker after every claim (each clause after a `;` or a dash needs its own),
+and pass evidence as tight, chunk-level spans: whole-document evidence lets
+more wrong citations through.
 
 **Relationship to corroboration-kit:** a sibling library that answers a
 different question. grounding-kit checks that a citation *marker* in generated
@@ -126,6 +135,57 @@ console.log(result.sentences[2].reasons);
 // { e2: "not-supported" }: the id exists, but its text didn't pass supports()
 ```
 
+## Recipes
+
+### A number-aware `supports()`
+
+The default matcher ignores short words and numbers, so `300 metres` reads
+as supported by evidence that says `330 metres`. A few lines fix numbers on
+top of it:
+
+```ts
+import { classifyDocument, defaultSupports, type SupportsFn } from "grounding-kit";
+
+const numbersIn = (text: string) => text.match(/\d+(?:[.,]\d+)*/g) ?? [];
+
+// Every number in the claim must appear in the evidence, and the default
+// word-overlap check must still pass.
+const numberAware: SupportsFn = (claim, evidence) => {
+  const available = new Set(numbersIn(evidence));
+  return numbersIn(claim).every((n) => available.has(n)) && defaultSupports(claim, evidence);
+};
+
+classifyDocument(answer, evidence, { supports: numberAware });
+```
+
+An embedding or NLI check plugs in the same way. `supports()` must be
+synchronous; if your judge is async, run it first and look the answers up.
+
+### Default verdicts as review flags, not hard blocks
+
+For paraphrase-heavy output, block only on the structural failures and send
+lexical misses to a person:
+
+```ts
+import { classifyDocument } from "grounding-kit";
+
+const result = classifyDocument(answer, evidence);
+const hard = (s: (typeof result.sentences)[number]) =>
+  s.status === "ungrounded" ||
+  Object.values(s.reasons).some((r) => r === "unknown-id" || r === "invalid-evidence");
+
+const blocked = result.sentences.filter(hard);
+const toReview = result.sentences.filter((s) => s.status === "invalid" && !hard(s));
+
+if (blocked.length > 0) {
+  // uncited claim or a citation to nothing: regenerate or strip it
+} else if (toReview.length > 0) {
+  // only "not-supported" or "no-content-words": queue for a reviewer
+} else {
+  // clean (check result.counts.placeholder for open gaps)
+}
+```
+
 ## API
 
 ### `splitSentences(text, config?) => string[]`
@@ -188,10 +248,14 @@ claims": a horizontal rule (`---`, `***`, `___`), a table separator row
 (`1. The battery...`, `Step 3. Plug it in.`) stays with that sentence. The
 opt-in `markdown: true` mode sets more aside; see "Markdown and layout".
 
+Text with no letter or digit left after a marker (the `.` in
+`...Insurance Co. [[cite:e1]].`) stays with the sentence the marker belongs
+to instead of becoming a unit of its own.
+
 Besides whitespace, `splitSentences` drops only: blank units, the clause
 separator itself at an accepted boundary, a marker with nothing before it
-anywhere in the document, and the scaffolding lines above (see
-ENGINEERING.md).
+anywhere in the document (and punctuation right after it), and the
+scaffolding lines above (see ENGINEERING.md).
 
 Work is linear in the length of `text` for the default patterns, including
 deeply nested brackets, long runs of markers, and unclosed `[TK` runs. A
@@ -374,14 +438,17 @@ sentence with several groups of citations (a group is one marker, or markers
 side by side with only spaces or punctuation between them), a citation is
 also accepted when it fully backs its own **span**: the text since the
 previous group (or the start of the sentence), plus, for the last group, any
-text after it. "Fully" means the span has at least three content words and
-every one of them (with the default matcher) appears in that id's evidence;
-with a custom `supports`, it means `supports(span, evidence)` is true.
+text after it. With the default matcher, "fully" means the span has at least
+one content word and every content word and every number in it appears in
+that id's evidence. With a custom `supports`, it means the span has at least
+three content words and `supports(span, evidence)` is true.
 
 So the span rule can only add passes, never take one away from 0.2.1:
 
 - `<evidence A, near verbatim> [[cite:a]], and <evidence B, near verbatim>
-  [[cite:b]].` now passes, where 0.2.1 failed both ids.
+  [[cite:b]].` now passes, where 0.2.1 failed both ids. A short span counts
+  too (`...330 metres tall [[cite:a]] and was completed in 1889
+  [[cite:b]].`), but not with a number its evidence lacks (`1999`).
 - `<claim A> [[cite:a]] and <claim B plus an uncited clause> [[cite:b]].`
   fails: the second span has words its evidence lacks, and the whole
   sentence is not supported either.
@@ -460,8 +527,10 @@ type SupportsFn = (sentenceText: string, evidenceText: string) => boolean;
 
 `classifySentence`/`classifyDocument` accept `config.supports` to decide
 whether a piece of evidence actually backs a claim. `sentenceText` is the
-marker-free text the citation is judged against: the whole sentence, or
-first its span (see "Sentences with several citations").
+text the citation is judged against, with every marker and placeholder
+removed (so a note such as `[citation needed: late fee amount]` is never read
+as claim words): the whole sentence, or first its span (see "Sentences with
+several citations").
 
 The **default** (`defaultSupports`) is intentionally naive lexical matching,
 not semantic entailment. Both sides are normalized (Unicode NFC, lower case,
@@ -533,7 +602,16 @@ Anything else (`[[cite:e1,e2]]`, `[[cite:e.1]]`) is not a marker: it stays
 in the text as prose and grounds nothing, so the sentence reads as uncited.
 
 `markerPattern` must contain exactly one capture group (the marker id) and
-must match at least one character. The kit does not count the groups: with no
+must match at least one character. A marker or placeholder match may not
+start or end with whitespace, because sentence edges are trimmed and that
+would change what the match is: a pattern whose source visibly begins or ends
+with whitespace (`/\{\{(\w+)\}\}\. /`, `/\s\[(\d+)\]/`, `/\[tbd\] ?/`) is
+refused before any text is read, and any other match that turns out to start
+or end with whitespace throws `GroundingConfigError` when it is found. A
+marker pattern must also match the same text inside a sentence as in the
+whole document (a lookbehind such as `/(?<= )\[(\d+)\]/` does not, because a
+marker can start a sentence); if a marker would be lost or changed by
+splitting, classification throws instead of judging the sentence without it. The kit does not count the groups: with no
 group a marker is still recognized but carries no id, so its sentence is
 classified `ungrounded`; with more than one, the first group is the id.
 
@@ -588,8 +666,10 @@ zero-length marker match.
 
 `GroundingConfigError` (exported) extends `TypeError` and has
 `name === "GroundingConfigError"`. It means the calling code or its
-configuration is wrong (a zero-length marker match, or a `supports` that
-returned a non-boolean), never that the text has a problem. Plain `TypeError`
+configuration is wrong (a zero-length marker match, a marker or placeholder
+pattern that can match with whitespace at an edge, a marker pattern that
+matches differently once the text is split, or a `supports` that returned a
+non-boolean), never that the text has a problem. Plain `TypeError`
 covers wrong argument types: a non-string text; a `config`, `abbreviations`
 or `evidenceMap` that is not a plain object; an unknown key in `config` or
 `abbreviations` (so a typo such as `markerPatern` can't silently fall back to

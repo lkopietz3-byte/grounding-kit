@@ -4,7 +4,7 @@ import {
   readSplitterOptions,
   resolveSplitter,
   splitResolved,
-  stripMarkersOf,
+  stripCitationsOf,
   type ResolvedSplitter,
   type SplitterConfig,
 } from "./sentenceSplitter.js";
@@ -180,17 +180,21 @@ interface PreparedClaim {
   length: number;
   significant: Set<string>;
   required: Set<string>;
+  // Every token holding a digit; the span rule requires all of them.
+  numbers: Set<string>;
 }
 
 function prepareClaim(text: string): PreparedClaim {
   const normalized = normalizeForOverlap(text);
   const significant = new Set<string>();
   const required = new Set<string>();
+  const numbers = new Set<string>();
   for (const t of tokenize(normalized)) {
     if (t.significant) significant.add(t.text);
     if (t.required) required.add(t.text);
+    if (HAS_DIGIT.test(t.text)) numbers.add(t.text);
   }
-  return { padded: ` ${normalized} `, length: normalized.length, significant, required };
+  return { padded: ` ${normalized} `, length: normalized.length, significant, required, numbers };
 }
 
 /** Evidence normalized once per classification call. */
@@ -217,10 +221,12 @@ function contentWordCount(text: string): number {
   return prepareClaim(text).significant.size;
 }
 
-// A span with fewer content words than this is too short to judge on its own
-// ("According to the lab [[cite:a]], ..."): its citation is judged against the
-// whole sentence instead, as in 0.2.1.
-const MIN_SPAN_WORDS = 3;
+// A span needs at least this many content words to be judged on its own;
+// otherwise ("and", ", which") its citation is judged against the whole
+// sentence only, as in 0.2.1.
+const MIN_SPAN_WORDS = 1;
+// A custom `supports` is asked about a span only from this many content words.
+const MIN_CUSTOM_SPAN_WORDS = 3;
 
 // The "claim contains the evidence" shortcut needs the evidence to be a
 // whole-word phrase of at least 12 characters and three significant words, so
@@ -414,20 +420,22 @@ function callSupports(supports: SupportsFn, claimText: string, evidence: string)
 /**
  * A run of citation markers with no letters or digits between them. `span`
  * is the text it is attached to, when the sentence has several groups and the
- * span has at least three content words; otherwise null.
+ * span has at least one content word; otherwise null.
  */
 interface CitationGroup {
   ids: string[];
   span: string | null;
+  // Content words in the span (0 when there is no span).
+  spanWords: number;
 }
 
 const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
 // Group the sentence's markers and find the span each group is attached to:
 // the text since the previous group (or the start), plus, for the last group,
-// any text after it. A sentence with one group, or a span with fewer than
-// three content words ("According to the lab", "and"), has no span of its
-// own: its citations are judged against the whole sentence, as in 0.2.1.
+// any text after it. A sentence with one group, or a span with no content
+// word ("and", ", which"), has no span of its own: its citations are judged
+// against the whole sentence only, as in 0.2.1.
 function citationGroups(sentence: string, claimText: string, splitter: ResolvedSplitter): CitationGroup[] {
   const sites = markerSitesOf(sentence, splitter.marker);
   const groups: Array<{ ids: string[]; start: number; end: number }> = [];
@@ -441,25 +449,28 @@ function citationGroups(sentence: string, claimText: string, splitter: ResolvedS
     previousEnd = site.end;
   }
   const withIds = groups.filter((g) => g.ids.length > 0);
-  if (withIds.length <= 1) return withIds.map((g) => ({ ids: g.ids, span: null }));
+  if (withIds.length <= 1) return withIds.map((g) => ({ ids: g.ids, span: null, spanWords: 0 }));
   return withIds.map((g, k) => {
     const from = k === 0 ? 0 : withIds[k - 1].end;
     const head = sentence.slice(from, g.start).trimEnd();
     const tail = k === withIds.length - 1 ? sentence.slice(g.end) : "";
     const glue = HAS_LETTER_OR_DIGIT.test(head.slice(-1)) && HAS_LETTER_OR_DIGIT.test(tail.slice(0, 1)) ? " " : "";
-    const span = stripMarkersOf(head + glue + tail, splitter.marker).trim();
-    return { ids: g.ids, span: span !== claimText && contentWordCount(span) >= MIN_SPAN_WORDS ? span : null };
+    const span = stripCitationsOf(head + glue + tail, splitter).trim();
+    const words = span === claimText ? 0 : contentWordCount(span);
+    return { ids: g.ids, span: words >= MIN_SPAN_WORDS ? span : null, spanWords: words };
   });
 }
 
 // Whether `evidence` backs every content word of `span`: the span appears in
-// it, or every significant word (and every required piece) of the span is in
-// it. Used for the per-span rule, which may only add passes, so it demands
-// full coverage instead of the 60% the whole-sentence check allows.
+// it as whole words, or every significant word, every required piece and
+// every number of the span is in it. Used for the per-span rule, which may
+// only add passes, so it demands full coverage (numbers included) instead of
+// the 60% the whole-sentence check allows.
 function fullyCovers(span: PreparedClaim, evidence: PreparedEvidence): boolean {
   if (span.significant.size < MIN_SPAN_WORDS) return false;
   if (span.length <= evidence.length && evidence.padded.includes(span.padded)) return true;
   for (const w of span.required) if (!evidence.tokens.has(w)) return false;
+  for (const w of span.numbers) if (!evidence.tokens.has(w)) return false;
   for (const w of span.significant) if (!evidence.tokens.has(w)) return false;
   return true;
 }
@@ -470,7 +481,9 @@ function classifyResolved(
   { splitter, supports }: ResolvedClassify,
   preparedEvidence: Map<string, PreparedEvidence>,
 ): SentenceClassification {
-  const claimText = stripMarkersOf(sentence, splitter.marker).trim();
+  // Markers and placeholders are removed before judging: a placeholder's note
+  // ("[citation needed: late fee amount]") is not a claim word.
+  const claimText = stripCitationsOf(sentence, splitter).trim();
   const groups = citationGroups(sentence, claimText, splitter);
   const citedIds: string[] = [];
   for (const g of groups) for (const id of g.ids) citedIds.push(id);
@@ -568,7 +581,11 @@ function classifyResolved(
         // failure, reported apart from a mismatch.
         return claimPrepared().significant.size === 0 ? "no-content-words" : "not-supported";
       }
-      if (group.span !== null && askCustom(id, group.span, ev.text)) return "supported";
+      // A custom judge sees a span only when it has at least three content
+      // words; shorter spans are too thin to judge on their own.
+      if (group.span !== null && group.spanWords >= MIN_CUSTOM_SPAN_WORDS && askCustom(id, group.span, ev.text)) {
+        return "supported";
+      }
       return askCustom(id, claimText, ev.text) ? "supported" : "not-supported";
     };
     for (const id of group.ids) {

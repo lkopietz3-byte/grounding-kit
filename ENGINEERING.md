@@ -16,7 +16,8 @@
    of `--`, or a spaced `-`; consumed by design, see README
    "Clause-level splitting"), a leading citation marker with nothing before
    it anywhere in the whole document (it can't ground anything, so it's
-   dropped), a unit made only of whitespace, default-ignorable and control
+   dropped, along with punctuation right after it, which goes to
+   `nonClaims`), a unit made only of whitespace, default-ignorable and control
    characters (it shows nothing, so it is not a claim), and scaffolding
    lines (a rule, a table separator row, a bare fence line, a lone list
    numeral; with the opt-in `markdown: true`, also headings, labels, lead-ins,
@@ -47,7 +48,11 @@
    is frozen (object + both arrays).
 7. Zero runtime dependencies.
 8. A marker match of zero characters throws `GroundingConfigError`; the
-   marker scans never loop. A `supports` result that is not a real boolean
+   marker scans never loop. A marker or placeholder pattern that can match
+   with whitespace at an edge is refused (config time when the source shows
+   it, else at the first such match), and classification throws if splitting
+   lost or changed any marker, so trimming can never change what a marker
+   is. A `supports` result that is not a real boolean
    throws `GroundingConfigError`; it is never awaited or coerced.
 9. Caller input is read once. `config` options, abbreviation lists and each
    evidence value are snapshotted per call, so a getter or Proxy cannot

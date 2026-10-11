@@ -292,7 +292,65 @@ function scanMarkers(text: string, re: RegExp): RegExpExecArray[] {
       re.lastIndex = 0;
       throw zeroLengthMarker(m.index);
     }
+    assertNoEdgeWhitespace(m[0], m.index, "markerPattern", re);
     matches.push(m);
+  }
+}
+
+const EDGE_WHITESPACE_RULE =
+  "a marker or placeholder match may not start or end with whitespace, because splitting trims whitespace at sentence edges and would change what the match is";
+
+// Runtime half of the edge-whitespace rule: a real match that starts or ends
+// with whitespace is a configuration error, reported like a zero-length one.
+function assertNoEdgeWhitespace(match: string, index: number, label: string, re: RegExp): void {
+  if (/^\s|\s$/u.test(match)) {
+    re.lastIndex = 0;
+    throw new GroundingConfigError(
+      `${label} matched ${JSON.stringify(match)} at index ${String(index)}, which starts or ends with whitespace: ${EDGE_WHITESPACE_RULE}.`,
+    );
+  }
+}
+
+// Config-time half of the edge-whitespace rule: a pattern whose source
+// visibly begins or ends (in any top-level alternative) with an atom that
+// matches whitespace (" ", "\s", "\t", "\n", "\r", or a class holding a
+// space or "\s"), with or without a quantifier, is refused before any text is
+// read. Anything subtler is caught by the runtime check on the first such
+// match.
+function patternCanEdgeOnWhitespace(source: string): boolean {
+  const alternatives: string[] = [];
+  let depth = 0;
+  let inClass = false;
+  let start = 0;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      continue;
+    }
+    if (c === "[") inClass = true;
+    else if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === "|" && depth === 0) {
+      alternatives.push(source.slice(start, i));
+      start = i + 1;
+    }
+  }
+  alternatives.push(source.slice(start));
+  const ws = String.raw`(?: |\\s|\\t|\\n|\\r|\\f|\\v|\\x20|\\u0020|\[(?:[^\]\\]|\\.)*?(?: |\\s)(?:[^\]\\]|\\.)*\])`;
+  const quantifier = String.raw`(?:[*+?]|\{\d+(?:,\d*)?\})?\??`;
+  const leading = new RegExp(`^\\^?${ws}`);
+  const trailing = new RegExp(`(?<!\\\\)${ws}${quantifier}\\$?$`);
+  return alternatives.some((alt) => leading.test(alt) || trailing.test(alt));
+}
+
+function assertPatternEdges(source: string, label: string): void {
+  if (patternCanEdgeOnWhitespace(source)) {
+    throw new GroundingConfigError(`${label} /${source}/ can start or end a match with whitespace: ${EDGE_WHITESPACE_RULE}.`);
   }
 }
 
@@ -314,6 +372,7 @@ function scanPlaceholders(text: string, re: RegExp): RegExpExecArray[] {
       if (re.lastIndex > text.length) return matches;
       continue;
     }
+    assertNoEdgeWhitespace(m[0], m.index, "placeholderPattern", re);
     matches.push(m);
   }
 }
@@ -370,6 +429,8 @@ export function resolveSplitter(options: {
   }
   const marker = copyPattern(markerPattern, "markerPattern");
   const placeholder = copyPattern(placeholderPattern, "placeholderPattern");
+  assertPatternEdges(marker.source, "markerPattern");
+  assertPatternEdges(placeholder.source, "placeholderPattern");
   const markerFlags = marker.flags.replace(/[gy]/g, "");
   const placeholderFlags = placeholder.flags.replace(/[gy]/g, "");
   return {
@@ -434,12 +495,19 @@ function markerAt(text: string, pos: number, resolved: ResolvedSplitter): number
   resolved.markerSticky.lastIndex = 0;
   if (m === null) return 0;
   if (m[0].length === 0) throw zeroLengthMarker(pos);
+  assertNoEdgeWhitespace(m[0], pos, "markerPattern", resolved.markerSticky);
   return m[0].length;
 }
 
 // Length of a placeholder starting exactly at `pos`, or 0.
 function placeholderAt(text: string, pos: number, resolved: ResolvedSplitter): number {
-  return stickyLength(resolved.placeholderSticky, text, pos);
+  const re = resolved.placeholderSticky;
+  re.lastIndex = pos;
+  const m = re.exec(text);
+  re.lastIndex = 0;
+  if (m === null || m[0].length === 0) return 0;
+  assertNoEdgeWhitespace(m[0], pos, "placeholderPattern", re);
+  return m[0].length;
 }
 
 function hasMarker(text: string, resolved: ResolvedSplitter): boolean {
@@ -1253,7 +1321,14 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
     atBlockStart = false;
     sentences.push(trimmed);
   };
-  for (const block of prepareBlocks(text, resolved, nonClaims)) {
+  const blocks = prepareBlocks(text, resolved, nonClaims);
+  // Every marker as matched in the lines before any splitting or trimming.
+  // The units must hold exactly these, in order (less any leading markers
+  // dropped below), or a split or trim changed what a marker is.
+  const expectedMarkers: string[] = [];
+  for (const block of blocks) for (const m of scanMarkers(block, resolved.marker)) expectedMarkers.push(m[0]);
+  let droppedMarkers = 0;
+  for (const block of blocks) {
     atBlockStart = true;
     // A default-ignorable character right after a terminator (and its
     // closers) would keep the boundary regex from seeing "terminator,
@@ -1315,17 +1390,28 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
         // They sat after the PREVIOUS unit's terminal period.
         const group = peeled.map((item) => item.text).join(" ");
         merged[merged.length - 1] = `${merged[merged.length - 1]} ${group}`;
-        // Only a remainder that shows nothing is dropped; non-Latin text and
-        // bare punctuation are kept as their own unit.
-        if (!isBlank(rest)) merged.push(rest);
+        // A remainder with no letter or digit ("." after "Co. [[cite:a]]")
+        // is the end of that same sentence, so it stays with it; text in any
+        // script is kept as its own unit; a remainder that shows nothing is
+        // dropped.
+        if (!isBlank(rest)) {
+          if (LETTER_OR_DIGIT.test(rest)) merged.push(rest);
+          else merged[merged.length - 1] = `${merged[merged.length - 1]}${rest}`;
+        }
       } else {
         // Nothing before them. A marker grounds nothing and is dropped; from
         // the first placeholder on, the unit is kept whole, so a gap marker
-        // written in front of its sentence still covers it.
+        // written in front of its sentence still covers it. A remainder with
+        // no letter or digit is not a claim and is set aside.
         const first = peeled.findIndex((item) => item.placeholder);
-        const kept =
-          first < 0 ? rest : [...peeled.slice(first).map((item) => item.text), rest].join(" ");
-        if (!isBlank(kept)) merged.push(kept.trim());
+        droppedMarkers += first < 0 ? peeled.length : first;
+        const kept = (
+          first < 0 ? rest : [...peeled.slice(first).map((item) => item.text), rest].join(" ")
+        ).trim();
+        if (!isBlank(kept)) {
+          if (first < 0 && !LETTER_OR_DIGIT.test(kept)) nonClaims.push(kept);
+          else merged.push(kept);
+        }
       }
       continue;
     }
@@ -1335,6 +1421,14 @@ export function splitResolved(text: string, resolved: ResolvedSplitter): SplitRe
       continue;
     }
     merged.push(unit);
+  }
+  const actualMarkers: string[] = [];
+  for (const unit of merged) for (const m of scanMarkers(unit, resolved.marker)) actualMarkers.push(m[0]);
+  const expected = expectedMarkers.slice(droppedMarkers);
+  if (actualMarkers.length !== expected.length || actualMarkers.some((m, i) => m !== expected[i])) {
+    throw new GroundingConfigError(
+      "markerPattern matched different text once the document was split into sentences (a marker was lost, cut or changed). A marker pattern must match the same text inside a sentence as in the whole document: avoid lookbehind or lookahead that depends on the text around the marker.",
+    );
   }
   return { units: merged, nonClaims };
 }
@@ -1458,21 +1552,48 @@ const TIGHT_BEFORE = /[.,;:!?)\]}”’"'»。．！？、，；：）]/u;
 
 /** @internal marker removal with a private, already-normalized marker regex. */
 export function stripMarkersOf(text: string, marker: RegExp): string {
-  const matches = scanMarkers(text, marker);
+  return stripSites(
+    text,
+    scanMarkers(text, marker).map((m) => ({ start: m.index, end: m.index + m[0].length })),
+  );
+}
+
+/**
+ * @internal The claim text a citation is judged against: the sentence with
+ * every marker and every placeholder removed, so a note inside a placeholder
+ * ("[citation needed: late fee amount]") is never read as claim words.
+ */
+export function stripCitationsOf(text: string, resolved: ResolvedSplitter): string {
+  const sites = [
+    ...scanMarkers(text, resolved.marker).map((m) => ({ start: m.index, end: m.index + m[0].length })),
+    ...scanPlaceholders(text, resolved.placeholderGlobal).map((m) => ({ start: m.index, end: m.index + m[0].length })),
+  ].sort((x, y) => x.start - y.start);
+  const kept: Array<{ start: number; end: number }> = [];
+  for (const site of sites) {
+    const prev = kept[kept.length - 1];
+    if (prev !== undefined && site.start < prev.end) prev.end = Math.max(prev.end, site.end);
+    else kept.push({ ...site });
+  }
+  return stripSites(text, kept);
+}
+
+// Remove the given sorted, non-overlapping sites, changing only the text at
+// each site (see stripCitationMarkers).
+function stripSites(text: string, matches: ReadonlyArray<{ start: number; end: number }>): string {
   if (matches.length === 0) return text;
   let out = "";
   let last = 0;
   let i = 0;
   while (i < matches.length) {
-    const start = matches[i].index;
-    let end = start + matches[i][0].length;
+    const start = matches[i].start;
+    let end = matches[i].end;
     let j = i + 1;
-    // Group markers separated only by spaces or tabs into one site.
+    // Group sites separated only by spaces or tabs into one.
     while (j < matches.length) {
       let k = end;
-      while (k < matches[j].index && SPACE_OR_TAB(text[k])) k++;
-      if (k !== matches[j].index) break;
-      end = matches[j].index + matches[j][0].length;
+      while (k < matches[j].start && SPACE_OR_TAB(text[k])) k++;
+      if (k !== matches[j].start) break;
+      end = matches[j].end;
       j++;
     }
     let left = start;

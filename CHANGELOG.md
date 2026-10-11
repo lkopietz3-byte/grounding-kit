@@ -99,6 +99,21 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   cited dash run stops before one. With `markdown: true`, a fence delimiter
   that carries a marker or placeholder (```` ```text [[cite:x]] ````) is
   judged, and such a citation keeps the whole block from being set aside.
+- **Review of f39a77e.** A marker or placeholder pattern whose matches can
+  start or end with whitespace is refused (at configuration time when the
+  source shows it, otherwise at the first such match), and classification
+  throws if splitting would lose or change any marker, so trimming can never
+  turn an unknown citation into nothing.
+- **Field trial D1.** Placeholder text is removed, like markers, before
+  `supports()` and the span rule: `<supported claim> [[cite:a]]. [citation
+  needed: late fee amount]` is a placeholder with `a` supported, not invalid.
+- **Field trial D2.** Text with no letter or digit after a marker stays with
+  its sentence: `...Insurance Co. [[cite:hdr]].` is one grounded sentence,
+  not a sentence plus an ungrounded `.`.
+- **Span rule, default matcher.** A span with one or more content words now
+  counts when every content word and every number in it appears in its
+  evidence (custom `supports`: three or more content words, as before). It
+  still only adds passes.
 - **Timing tests measure CPU time.** `test/scaling.test.ts` now measures the
   CPU time of the test process instead of wall-clock time, keeps every growth
   ratio check, adds an absolute CPU budget for the large classified document,
