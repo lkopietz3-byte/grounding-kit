@@ -30,8 +30,8 @@
 4. Classification is deterministic: same input -> same output, independent
    of `evidenceMap` key insertion order, with no `Date.now`/`Math.random`
    anywhere in the library.
-5. No known quadratic-time input to `splitSentences` as of 2026-09-28 for the
-   default patterns (seven O(n²) inputs have been found and fixed — see
+5. No known quadratic-time input to `splitSentences` as of 0.3.0 for the
+   default patterns (every quadratic input found so far has been fixed; see
    CHANGELOG). Empirical, not a formal proof; each fixed case has a regression
    test, and the nested-bracket family has a hard 100,000-character time budget
    plus a scaling check. A caller-supplied regex that backtracks badly is the
@@ -60,9 +60,18 @@
    `evidenceMap` must be plain or null-prototype objects.
 10. Release gate: under default options, no laundering document that 0.2.1
    flagged may come back clean, and no honest document that 0.2.1 passed may
-   come back flagged, across the review corpus, the Codex cases and the
-   verdict table (`test/gate.test.ts`). A leniency that cannot meet it goes
+   come back flagged, across the review corpus, the independent review cases
+   and the verdict table (`test/gate.test.ts`). A leniency that cannot meet it goes
    behind an opt-in option with its measured trade-off in the README.
+11. Unknown keys in `config` and `abbreviations` throw a `TypeError`, so a
+   typo can never fall back to a default silently.
+12. The per-citation span rule can only add passes: a citation is always
+   judged against its whole sentence first, and the span check is an
+   additional way to be accepted, never a stricter one. A change to that rule
+   must keep `test/gate.test.ts` green without editing an expected verdict.
+13. Timing tests measure CPU time of the test process, not wall-clock time,
+   and keep their growth-ratio checks. Rerun a timeout alone before treating
+   it as real, and never loosen an assertion to pass.
 
 ## Setup and verification
 
@@ -100,9 +109,8 @@ budgets).
 See the README's "Limits" section in full. In short: `defaultSupports` is
 normalized substring/word-overlap matching, not semantic entailment or
 truth-checking; the sentence splitter is a heuristic (its default
-abbreviation list is small and does not cover every common abbreviation,
-e.g. month names like "Jan." or degree suffixes like "Ph.D." are not in
-it); and `isClean`/`grounded` describe
+abbreviation list is small and English-oriented, and a few joins that 0.2.1
+made are kept on purpose; see the README's "Limits"); and `isClean`/`grounded` describe
 "passed this library's mechanical structural check," never "verified true."
 
 ## Are the types wrong? (attw)
@@ -111,7 +119,7 @@ CI runs [`arethetypeswrong`](https://github.com/arethetypeswrong/arethetypeswron
 (`npm run attw`, which is `attw --pack . --ignore-rules cjs-resolves-to-esm`)
 against the packed tarball after the build step. The `cjs-resolves-to-esm` rule is ignored on
 purpose: this is an ESM-only package (`"type": "module"`, no `require` entry point), so a
-CommonJS consumer must use Node's `require(esm)` support (Node >=20.19 or >=22.12 — see
+CommonJS consumer must use Node's `require(esm)` support (Node >=20.19 or >=22.12; see
 "Runtime support policy" below) rather than a native `require`. A dual CJS+ESM build was
 rejected to avoid the dual-package hazard (two separately-identified copies of the same module,
 with broken `instanceof` checks and duplicated module state across the CJS and ESM entry
@@ -128,7 +136,7 @@ accident. To release: add a dated entry to `CHANGELOG.md`, bump `version` in
 
 npm's unpublish policy is deliberately narrow. Within 72 hours of publishing, a version can be
 unpublished only if no other published package depends on it. After 72 hours, unpublishing also
-requires fewer than 300 downloads in the last week and a single maintainer — most released
+requires fewer than 300 downloads in the last week and a single maintainer, so most released
 versions won't qualify either way. A given `name@version` can never be reused, published or
 not, even after an unpublish. Treat unpublish as unavailable: prefer fixing forward with a new
 patch version, and use `npm deprecate <name>@"<range>" "<message>"` to warn consumers off a
@@ -139,7 +147,7 @@ This package has no server component and no migration state to reverse either wa
 ### Runtime support policy
 
 - **Supported (recommended for production):** Node 22 and 24 LTS; Node 26 current.
-- **Compatibility-tested:** Node 20. Node 20 is end-of-life — nodejs.org's release page
+- **Compatibility-tested:** Node 20. Node 20 is end-of-life: nodejs.org's release page
   (<https://nodejs.org/en/about/previous-releases>) lists it as `EOL`, with its final release
   dated Mar 24, 2026. The `compat` job in `verify.yml` still runs on Node 20 to catch
   regressions, but that runtime gets no security fixes upstream; don't run production traffic

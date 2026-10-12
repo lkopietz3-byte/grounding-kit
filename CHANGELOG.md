@@ -7,15 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Fixes from the 2026-10-10 hunt and its review. Statuses, exports and
-signatures are unchanged; results gain two fields. The defaults are held to a
-release gate: on the review's 80-document corpus, the Codex review cases and
-`test/verdict-table.test.ts`, no laundering document that 0.2.1 flagged comes
-back clean, and no honest document that 0.2.1 passed comes back flagged
-(`test/gate.test.ts`, with the 0.2.1 verdicts recorded in
-`test/fixtures/v021-verdicts.json`). On that corpus the default catches 52 of
-55 laundering documents (0.2.1: 51) and passes 14 of 25 honest ones (0.2.1:
-12).
+## [0.3.0] - unreleased
+
+Minor release. Statuses, exports and signatures are unchanged, and results
+gain two fields. Verdicts move in both directions, and a few inputs that used
+to be accepted now throw, so read "Breaking changes" before upgrading. The
+defaults are held to a release gate: on an 80-document review corpus, a set
+of independent review cases and `test/verdict-table.test.ts`, no laundering
+document that 0.2.1 flagged comes back clean, and no honest document that
+0.2.1 passed comes back flagged (`test/gate.test.ts`, with the 0.2.1 verdicts
+recorded in `test/fixtures/v021-verdicts.json`). On that corpus the default
+catches 52 of 55 laundering documents (0.2.1: 51) and passes 14 of 25 honest
+ones (0.2.1: 12). The corpus is small and written for this release, so treat
+it as a regression gate, not a measure of how your own text will do.
+
+### Breaking changes
+
+Each item says what to change.
+
+- **An unknown key in `config` or `abbreviations` throws a `TypeError`.**
+  It used to be ignored, so a typo such as `markerPatern` fell back to the
+  default. Migration: fix or remove the key. `supports` is still accepted by
+  `splitSentences`, so one config object can be shared.
+- **An abbreviation entry that could never match throws a `TypeError`**, and
+  an entry written with a dot (`"dr."`) now matches. Migration: keep entries
+  to letters (dots optional); remove anything else.
+- **A marker or placeholder pattern whose matches can start or end with
+  whitespace is refused** with a `GroundingConfigError` (at configuration
+  time when the source shows it, otherwise at the first such match), and
+  classification throws if splitting would lose or change a marker (for
+  example a lookbehind such as `/(?<= )\[(\d+)\]/`). Migration: leave
+  surrounding whitespace out of the pattern and avoid lookbehinds that depend
+  on what comes before the marker.
+- **Some documents that were clean in 0.2.1 are now flagged.** A marker or
+  placeholder after a period that follows an abbreviation or single letter,
+  a dash or `--` tail after a cited clause, new terminators (`…`, `‼`, `।`
+  and others), a changed `TK` placeholder rule, and stricter short-evidence
+  matching (`"Acme"` no longer supports a sentence that merely mentions it)
+  all catch laundering that 0.2.1 let through. Migration: re-run your own
+  documents, and read `reasons` to see why a sentence changed.
+- **Some documents that failed in 0.2.1 now pass** (a citation that fully
+  backs its own span, closing quotes after a period, `Jan. 5, 2024`,
+  `&amp;`, a placeholder note after a cited sentence). Migration: none needed;
+  re-baseline any stored verdicts.
+- **Scaffolding lines are no longer units.** A horizontal rule, a table
+  separator row, a bare fence line and a lone list numeral are set aside, so
+  sentence counts change and `nonClaims` lists them. Migration: stop
+  filtering these lines yourself if you did.
+- **A custom `supports` may be called with a span** (the part of a sentence
+  around one citation group) as well as with the whole sentence, with
+  placeholders removed, and once per distinct (id, text) pair. Migration:
+  make `supports` a pure function of its two arguments.
+- **`stripCitationMarkers` changes only the text at marker sites.** It no
+  longer collapses double spaces, removes the space before punctuation or
+  trims the end of the text elsewhere. Migration: normalize whitespace
+  yourself if you relied on it.
+- **Results gain `reasons` and `nonClaims`.** Code that deep-compares whole
+  result objects needs the new fields. Migration: compare the fields you use.
+- **Unspaced scripts and combining marks compare differently.** Chinese,
+  Japanese, Thai, Lao, Khmer and Burmese text is compared by character pairs,
+  and combining marks (Hindi vowel signs, Arabic diacritics) stay with their
+  letters. Migration: re-baseline verdicts for text in those scripts.
 
 ### Fixed
 
@@ -75,15 +127,15 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   `u`- or `v`-flag placeholder pattern now advances by a whole code point
   instead of looping inside a surrogate pair.
 
-- **Review of 2042351.** A CJK full stop followed by a closing bracket or
+- **Boundaries and quotes.** A CJK full stop followed by a closing bracket or
   quote (`。」`, `。』`, `。）` ...) and then text with no space is a sentence
   boundary again, and a Western terminator with a closing quote directly
   before a capital (`."Prices`) is one too. A month abbreviation no longer
   joins a number that is not a day (`Jan. 5,000`, `5.5`, `5%`, `5th`). With
   `markdown: true`, a fenced block that carries a citation is no longer set
   aside. One id cited in many separate groups is checked once per sentence
-  (8,000 occurrences: about 560 ms on 2042351, about 30 ms now).
-- **Review of 9ca1177.** No sentence boundary falls inside a recognized
+  (8,000 occurrences: about 560 ms before, about 30 ms now).
+- **Markers, dates and fences.** No sentence boundary falls inside a recognized
   marker or placeholder, with the default or a custom pattern, so an id such
   as `[[missing."X]]` reaches classification whole. A full date followed by
   punctuation (`Jan. 5 2024.`, `Jan. 5, 2024, and ...`) stays one sentence;
@@ -91,7 +143,7 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   renewed ...` is two sentences). With `markdown: true`, a cited fenced block
   keeps its delimiters (with or without an info string) as scaffolding while
   its contents are judged.
-- **Review of 401409e.** The invisible-character spacing step checks the
+- **Invisible characters and fence delimiters.** The invisible-character spacing step checks the
   point where it inserts its space, not the terminator, so a custom marker
   that ends in its own terminator (`{{e}}.`) followed by a zero-width
   character still ends the sentence. A boundary's whitespace may not cut
@@ -99,29 +151,29 @@ back clean, and no honest document that 0.2.1 passed comes back flagged
   cited dash run stops before one. With `markdown: true`, a fence delimiter
   that carries a marker or placeholder (```` ```text [[cite:x]] ````) is
   judged, and such a citation keeps the whole block from being set aside.
-- **Review of f39a77e.** A marker or placeholder pattern whose matches can
+- **Whitespace in patterns.** A marker or placeholder pattern whose matches can
   start or end with whitespace is refused (at configuration time when the
   source shows it, otherwise at the first such match), and classification
   throws if splitting would lose or change any marker, so trimming can never
   turn an unknown citation into nothing.
-- **Field trial D1.** Placeholder text is removed, like markers, before
+- **Placeholder notes.** Placeholder text is removed, like markers, before
   `supports()` and the span rule: `<supported claim> [[cite:a]]. [citation
   needed: late fee amount]` is a placeholder with `a` supported, not invalid.
-- **Field trial D2.** Text with no letter or digit after a marker stays with
+- **Trailing punctuation after a marker.** Text with no letter or digit after a marker stays with
   its sentence: `...Insurance Co. [[cite:hdr]].` is one grounded sentence,
   not a sentence plus an ungrounded `.`.
 - **Span rule, default matcher.** A span with one or more content words now
   counts when every content word and every number in it appears in its
   evidence (custom `supports`: three or more content words, as before). It
   still only adds passes.
-- **Review of 1eb99c9.** The span rule compares numbers as complete written
+- **Number comparison and leading markers.** The span rule compares numbers as complete written
   values read before normalization (sign, currency, separators, percent), so
   `$99.18` no longer matches `$18.99`. A marker is dropped as
   document-leading only when nothing visible came before it, including a
   heading or a symbol-only line that was set aside. The config-time
   whitespace check no longer refuses negated classes such as `[^\s]`; when
   the source is not clear, the runtime check on real matches decides.
-- **Review of 9898ba4.** The span rule now applies two number guards, both
+- **Number guards on spans.** The span rule now applies two number guards, both
   required: every whole written number (digits of any script, read after URLs
   and markdown link targets are removed) and every normalized word holding a
   numeric character (`x1`, `١٥`, `m²`) must appear in the evidence. Digits are
@@ -356,7 +408,7 @@ First release.
 
 - `splitSentences(text, config?)`: deterministic, dependency-free sentence
   (technically clause-level) splitter hardened against citation-marker
-  laundering — abbreviation periods that don't end a sentence, non-ASCII
+  laundering: abbreviation periods that don't end a sentence, non-ASCII
   terminators, a marker glued to adjacent text with no whitespace,
   leading-marker peeling (a marker after a period grounds the sentence it
   ends, never the one that follows), and clause-level splitting on `;`, an
@@ -368,8 +420,8 @@ First release.
   `EvidenceMap`, with `invalid` (a forged or unattributable citation)
   outranking everything else, including an honest placeholder.
 - `defaultSupports`: the default (naive, non-semantic) evidence-match
-  function — normalized substring containment or ≥60% significant-word
-  overlap — exported so callers can see exactly what it does and replace it.
+  function (normalized substring containment or at least 60% significant-word
+  overlap), exported so callers can see exactly what it does and replace it.
   Comparison is NFC-normalized so accented text in different (both valid)
   Unicode forms still matches.
 - `extractCitedIds`, `extractAllCitedIds`, `stripCitationMarkers`:
@@ -377,7 +429,7 @@ First release.
 - `DEFAULT_ABBREVIATIONS`, `DEFAULT_MARKER_PATTERN`,
   `DEFAULT_PLACEHOLDER_PATTERN`: the shipped defaults, exported and frozen
   (`DEFAULT_ABBREVIATIONS`) or safe for direct reuse including `.test()`
-  (the two regexes — the library always clones them internally, so a
+  (the two regexes; the library always clones them internally, so a
   caller's own use of the same object is never corrupted).
   `DEFAULT_ABBREVIATIONS.contextFuse` includes `"am"`, `"pm"`, and `"us"`,
   so "9 a.m." and "the U.S." no longer split mid-sentence by default; they
@@ -393,7 +445,7 @@ instead of crashing the classifier (own-property lookup via `Object.hasOwn`
 plus a `typeof` guard on the evidence value). Three algorithmic-complexity
 issues found by fuzzing the splitter with adversarial-shaped input (a long
 run of colons, of single-letter initials, or of plain letters with no
-period) were fixed — each was O(n²) and now runs in linear-ish time. A
+period) were fixed; each was O(n²) and now runs in linear-ish time. A
 data-loss bug where a citation-adjacent sentence written in a non-Latin
 script (or bare punctuation) could vanish entirely from the output is also
 fixed. See the kit's finishing report for full detail on each.

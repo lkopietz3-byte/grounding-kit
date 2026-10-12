@@ -13,19 +13,22 @@ dependencies; same input, same output.
 as `[[cite:e1]]` (RAG answer engines, report drafters, summarizers) and want a
 free, fast check in CI or before an answer ships.
 
-**The job it does well:** the structural checks. In a field trial on real
-source-and-summary pairs, every planted uncited sentence, unknown id and
-wrong-chunk citation was caught, and an uncited sentence cannot ride a
-neighbor's citation (after a period, a closing quote, an abbreviation, a dash
-or a semicolon).
+**The job it does well:** the structural checks. On a 200-item benchmark
+(100 honest sentences, 100 with a planted error), every uncited sentence,
+unknown id and wrong-chunk citation was caught (60 of 60), and an uncited
+sentence cannot ride a neighbor's citation (after a period, a closing quote,
+an abbreviation, a dash or a semicolon).
 
 **What it does not do:** decide whether a sentence is true to its source. The
-built-in `supports()` check is lexical word overlap. In the same trial it
-flagged about 4 in 10 honest paraphrases and passed about 4 in 10 one-word
-content edits (a changed number, an inserted "not"). Plug in your own
-`supports()` (an embedding, NLI or number-aware check) for the semantic step,
-and treat the default `not-supported` verdict as a review flag for
-paraphrase-heavy output; see "Recipes" below.
+built-in `supports()` check is lexical word overlap. In the same benchmark it
+flagged 21 of 100 honest sentences (1 of 35 verbatim, 2 of 35 close
+paraphrases, but 18 of 30 natural abstractive answers), and it caught 78 of
+90 planted content errors (negation flips 6 of 10). A changed number or an
+inserted "not" often passes, because the check does not compare short words
+or numbers in the claim against the evidence. Plug in your own `supports()`
+(an embedding, NLI or number-aware check) for the semantic step, and treat
+the default `not-supported` verdict as a review flag for paraphrase-heavy
+output; see "Recipes" below. These rates describe the benchmark's text, not yours.
 
 ## How it works
 
@@ -498,8 +501,8 @@ span, when it has one). A custom `supports` is called with the whole
 sentence for every distinct id, so its cost is up to (distinct ids) x (its
 own cost on the sentence).
 
-Measured with the default `supports` on a developer laptop under heavy load
-(numbers vary with the machine):
+Measured as CPU time with the default `supports` on a developer laptop under
+heavy load (numbers vary with the machine):
 
 - a 154,000-character sentence with 1,000 different ids spread through it:
   about 0.2 s (0.2.1: 7 to 20 s);
@@ -507,8 +510,8 @@ Measured with the default `supports` on a developer laptop under heavy load
   about 0.25 s (0.2.1: about 19 s);
 - 16,000 different ids, each after one word, in one 437,000-character
   sentence: about 0.1 s (0.2.1: about 180 s);
-- a 340,000-character sentence that repeats one id 20,000 times: about 0.2 s;
-- about 1 MB of short cited sentences (15,600 sentences): about 0.3 s.
+- a 340,000-character sentence that repeats one id 20,000 times: about 0.4 s;
+- about 770 KB of short cited sentences (15,600 sentences): about 0.5 s.
 
 Text made of many short cited sentences grows about linearly with its
 length (a scaling test covers this). A slow `supports` (an embedding or model
