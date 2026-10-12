@@ -192,10 +192,11 @@ interface PreparedClaim {
 // A complete number read from the text, after URLs and markdown link targets
 // are removed (as for the word comparison) but before normalization drops its
 // punctuation: optional sign, optional currency symbol, digits of any script
-// with decimal or grouping separators, optional percent. "$99.18" and
+// with decimal or grouping separators (including the Arabic ones), optional
+// percent, a currency symbol of any kind before or after. "$99.18" and
 // "$18.99" stay distinct. Digits are compared as written, not folded across
 // scripts: "15" and "١٥" do not match, which can only cost a span pass.
-const NUMBER = /[-+\u2212]?[$€£¥]?\p{Nd}+(?:[.,]\p{Nd}+)*%?/gu;
+const NUMBER = /[-+\u2212]?\p{Sc}?\p{Nd}+(?:[.,\u066B\u066C]\p{Nd}+)*[%\u066A]?\p{Sc}?/gu;
 
 function numbersIn(text: string): Set<string> {
   const out = new Set<string>();

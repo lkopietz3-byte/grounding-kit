@@ -900,10 +900,12 @@ function continuesLine(prevLine: string, next: string): boolean {
 // Lines that are always scaffolding, whatever `markdown` says: they hold no
 // letters or digits that could be a claim (a rule, a table separator row, a
 // bare fence line) or only a list numeral ("1.").
-function isAlwaysScaffolding(line: string, kind: LineKind): boolean {
+function isAlwaysScaffolding(line: string, kind: LineKind, resolved: ResolvedSplitter): boolean {
   if (kind === "rule" || kind === "tableSeparator") return true;
   if (kind === "fence") return fenceInfo(line)?.bare === true;
-  return isLoneLabel(line);
+  // A custom marker or placeholder pattern can match a label-shaped line
+  // ("2." with /(\d+)\./g); that line is a citation, so it is judged.
+  return isLoneLabel(line) && !carriesCitation(line, resolved);
 }
 
 /**
@@ -927,7 +929,7 @@ function prepareBlocks(
   if (!resolved.markdown) {
     const blocks: string[] = [];
     for (let i = 0; i < lines.length; i++) {
-      if (kinds[i] !== "blank" && isAlwaysScaffolding(lines[i], kinds[i])) nonClaims.push(lines[i].trim());
+      if (kinds[i] !== "blank" && isAlwaysScaffolding(lines[i], kinds[i], resolved)) nonClaims.push(lines[i].trim());
       else {
         blocks.push(lines[i]);
         afterVisible.push(nonClaims.length > 0);
@@ -1013,7 +1015,7 @@ function prepareBlocks(
       nonClaims.push(line.trim());
       continue;
     }
-    if (isAlwaysScaffolding(line, kind)) {
+    if (isAlwaysScaffolding(line, kind, resolved)) {
       flush();
       nonClaims.push(line.trim());
       continue;

@@ -437,6 +437,9 @@
   "span numbers: a number inside a claim URL is not a claim number": false,
   "span numbers: a number inside a claim link target is not a claim number": false,
   "span numbers: a different superscript does not pass": false,
-  "limit: conversational filler counts as an uncited sentence": false
+  "limit: conversational filler counts as an uncited sentence": false,
+  "release review: a custom-marker line that is only an unknown citation is not scaffolding": false,
+  "release review: Arabic-Indic decimal separator keeps 15.99 and 99.15 apart": false,
+  "release review: a different currency symbol does not pass a span": false
  }
 }

@@ -734,6 +734,10 @@ function.
   line, table header, lead-in or wrapped line that holds no statement and
   carries no marker is set aside even if it makes a claim (`## Prices doubled
   in 2025`), and `isClean` ignores it. Review `nonClaims` when you use it.
+- **`nonClaims` order is not always document order.** Lines set aside by the
+  line scan come first, then symbol-only leftovers that were peeled off a
+  marker (`[[cite:a]].` followed by `---` lists `---` before `.`). The entries
+  are the same; only their order can differ, and `isClean` is not affected.
 - **A clean result can still hide unresolved work.** `isClean` ignores
   placeholders and is `true` when nothing was checkable. It says the structure
   held together, not that the text is complete or ready to publish.
