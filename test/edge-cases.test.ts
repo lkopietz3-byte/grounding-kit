@@ -84,9 +84,9 @@ describe("fuzz categories: abbreviations, decimals, URLs, initials, unicode scri
   // not bugs — the point of testing them is to catch a silent regression,
   // not to claim more coverage than the defaults promise.
 
-  it("does not fuse ordinal list markers ('1.', '2.') — not in the default list", () => {
+  it("fuses ordinal list markers ('1.', '2.') into the item they label (hunt 2026-10-10)", () => {
     expect(splitSentences("1. Item one. 2. Item two.")).toEqual([
-      "1.", "Item one.", "2.", "Item two.",
+      "1. Item one.", "2. Item two.",
     ]);
   });
 

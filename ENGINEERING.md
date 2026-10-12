@@ -3,48 +3,75 @@
 ## Invariants (the promises the code is tested against)
 
 1. Classification precedence is fixed: `invalid` > `placeholder` >
-   `grounded` > `ungrounded`. A forged/unknown citation always outranks an
+   `grounded` > `ungrounded`. An unknown or unsupported citation always outranks an
    honest placeholder gap.
 2. Evidence lookup is own-property-only (`Object.hasOwn` + a `typeof
    === "string"` guard). A marker id that names an inherited
    `Object.prototype` member (`"__proto__"`, `"constructor"`,
    `"toString"`, ...) or maps to a non-string value classifies as
-   `invalid`; it never throws.
-3. `splitSentences` never silently loses a visible character, with three
-   documented exceptions: the separator character itself at an accepted
-   `;` / em-dash / cited-colon clause boundary (consumed by design — see
-   README "Clause-level splitting"), a leading citation marker with
-   nothing before it anywhere in the whole document (it can't ground
-   anything, so it's dropped), and a unit made only of whitespace,
-   default-ignorable and control characters (it shows nothing, so it is not
-   a claim). Covered by a seeded-PRNG property test. Bracket matching for
+   `invalid` (reason `unknown-id` or `invalid-evidence`); it never throws.
+3. `splitSentences` never silently loses a visible character, with four
+   documented exceptions: the separator itself at an accepted clause
+   boundary (`;`, em dash, or after a cited clause a colon, `–`, `―`, a run
+   of `--`, or a spaced `-`; consumed by design, see README
+   "Clause-level splitting"), a leading citation marker with nothing before
+   it anywhere in the whole document (it can't ground anything, so it's
+   dropped, along with punctuation right after it, which goes to
+   `nonClaims`), a unit made only of whitespace, default-ignorable and control
+   characters (it shows nothing, so it is not a claim), and scaffolding
+   lines (a rule, a table separator row, a bare fence line, a lone list
+   numeral; with the opt-in `markdown: true`, also headings, labels, lead-ins,
+   table headers and fenced code), which `classifyDocument` reports in
+   `nonClaims` instead (README "Markdown and layout"). Covered by a
+   seeded-PRNG property test. Bracket matching for
    clause splitting fails closed: an unbalanced `[` never suppresses a later
    real split. A default-ignorable character right after a terminator, or in
    front of a marker, cannot hide a boundary.
 4. Classification is deterministic: same input -> same output, independent
    of `evidenceMap` key insertion order, with no `Date.now`/`Math.random`
    anywhere in the library.
-5. No known quadratic-time input to `splitSentences` as of 2026-09-28 for the
-   default patterns (seven O(n²) inputs have been found and fixed — see
+5. No known quadratic-time input to `splitSentences` as of 0.3.0 for the
+   default patterns (every quadratic input found so far has been fixed; see
    CHANGELOG). Empirical, not a formal proof; each fixed case has a regression
    test, and the nested-bracket family has a hard 100,000-character time budget
    plus a scaling check. A caller-supplied regex that backtracks badly is the
    caller's configuration and is not covered. Classification is not linear in
-   the worst case: `supports` runs once per distinct cited id per sentence, so
-   one sentence costs about (distinct ids) x (sentence length) with the default
-   `supports`, and one id repeated many times costs one call.
+   the worst case: `supports` runs once per distinct (id, text) pair per sentence, so
+   a custom `supports` costs up to (distinct ids) x (its cost on the
+   sentence). The default `supports` normalizes each judged text once per
+   sentence and each evidence value once per call, so many ids on one long
+   sentence cost about the sentence length plus the evidence lengths.
 6. Internal code never mutates a caller-supplied `RegExp` (or the
    `lastIndex` of `DEFAULT_MARKER_PATTERN`/`DEFAULT_PLACEHOLDER_PATTERN`):
-   it scans with a private global, non-sticky copy. `DEFAULT_ABBREVIATIONS`
+   it scans with private copies (global and non-sticky to find matches,
+   sticky only to test one position). `DEFAULT_ABBREVIATIONS`
    is frozen (object + both arrays).
 7. Zero runtime dependencies.
 8. A marker match of zero characters throws `GroundingConfigError`; the
-   marker scans never loop. A `supports` result that is not a real boolean
+   marker scans never loop. A marker or placeholder pattern that can match
+   with whitespace at an edge is refused (config time when the source shows
+   it, else at the first such match), and classification throws if splitting
+   lost or changed any marker, so trimming can never change what a marker
+   is. A `supports` result that is not a real boolean
    throws `GroundingConfigError`; it is never awaited or coerced.
 9. Caller input is read once. `config` options, abbreviation lists and each
    evidence value are snapshotted per call, so a getter or Proxy cannot
    answer differently for a later sentence. `config`, `abbreviations` and
    `evidenceMap` must be plain or null-prototype objects.
+10. Release gate: under default options, no laundering document that 0.2.1
+   flagged may come back clean, and no honest document that 0.2.1 passed may
+   come back flagged, across the review corpus, the independent review cases
+   and the verdict table (`test/gate.test.ts`). A leniency that cannot meet it goes
+   behind an opt-in option with its measured trade-off in the README.
+11. Unknown keys in `config` and `abbreviations` throw a `TypeError`, so a
+   typo can never fall back to a default silently.
+12. The per-citation span rule can only add passes: a citation is always
+   judged against its whole sentence first, and the span check is an
+   additional way to be accepted, never a stricter one. A change to that rule
+   must keep `test/gate.test.ts` green without editing an expected verdict.
+13. Timing tests measure CPU time of the test process, not wall-clock time,
+   and keep their growth-ratio checks. Rerun a timeout alone before treating
+   it as real, and never loosen an assertion to pass.
 
 ## Setup and verification
 
@@ -82,9 +109,8 @@ budgets).
 See the README's "Limits" section in full. In short: `defaultSupports` is
 normalized substring/word-overlap matching, not semantic entailment or
 truth-checking; the sentence splitter is a heuristic (its default
-abbreviation list is small and does not cover every common abbreviation,
-e.g. month names like "Jan." or degree suffixes like "Ph.D." are not in
-it); and `isClean`/`grounded` describe
+abbreviation list is small and English-oriented, and a few joins that 0.2.1
+made are kept on purpose; see the README's "Limits"); and `isClean`/`grounded` describe
 "passed this library's mechanical structural check," never "verified true."
 
 ## Are the types wrong? (attw)
@@ -93,7 +119,7 @@ CI runs [`arethetypeswrong`](https://github.com/arethetypeswrong/arethetypeswron
 (`npm run attw`, which is `attw --pack . --ignore-rules cjs-resolves-to-esm`)
 against the packed tarball after the build step. The `cjs-resolves-to-esm` rule is ignored on
 purpose: this is an ESM-only package (`"type": "module"`, no `require` entry point), so a
-CommonJS consumer must use Node's `require(esm)` support (Node >=20.19 or >=22.12 — see
+CommonJS consumer must use Node's `require(esm)` support (Node >=20.19 or >=22.12; see
 "Runtime support policy" below) rather than a native `require`. A dual CJS+ESM build was
 rejected to avoid the dual-package hazard (two separately-identified copies of the same module,
 with broken `instanceof` checks and duplicated module state across the CJS and ESM entry
@@ -110,7 +136,7 @@ accident. To release: add a dated entry to `CHANGELOG.md`, bump `version` in
 
 npm's unpublish policy is deliberately narrow. Within 72 hours of publishing, a version can be
 unpublished only if no other published package depends on it. After 72 hours, unpublishing also
-requires fewer than 300 downloads in the last week and a single maintainer — most released
+requires fewer than 300 downloads in the last week and a single maintainer, so most released
 versions won't qualify either way. A given `name@version` can never be reused, published or
 not, even after an unpublish. Treat unpublish as unavailable: prefer fixing forward with a new
 patch version, and use `npm deprecate <name>@"<range>" "<message>"` to warn consumers off a
@@ -121,7 +147,7 @@ This package has no server component and no migration state to reverse either wa
 ### Runtime support policy
 
 - **Supported (recommended for production):** Node 22 and 24 LTS; Node 26 current.
-- **Compatibility-tested:** Node 20. Node 20 is end-of-life — nodejs.org's release page
+- **Compatibility-tested:** Node 20. Node 20 is end-of-life: nodejs.org's release page
   (<https://nodejs.org/en/about/previous-releases>) lists it as `EOL`, with its final release
   dated Mar 24, 2026. The `compat` job in `verify.yml` still runs on Node 20 to catch
   regressions, but that runtime gets no security fixes upstream; don't run production traffic

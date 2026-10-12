@@ -25,12 +25,11 @@ describe("bug: non-ASCII / punctuation-only content dropped after a peeled marke
     expect(doc.sentences.map((s) => s.sentence)).toContain("こんにちは。");
   });
 
-  it("keeps bare punctuation that follows a peeled leading marker", () => {
+  it("keeps bare punctuation that follows a peeled leading marker, with its sentence (field trial D2)", () => {
     const text = "The device passed testing. [[cite:e1]] ! It shipped.";
     const sentences = splitSentences(text);
     expect(sentences).toEqual([
-      "The device passed testing. [[cite:e1]]",
-      "!",
+      "The device passed testing. [[cite:e1]]!",
       "It shipped.",
     ]);
   });
@@ -56,36 +55,68 @@ describe("bug: non-ASCII / punctuation-only content dropped after a peeled marke
   });
 });
 
-describe("bug: quadratic-time (algorithmic-complexity DoS) inputs", () => {
+// CPU milliseconds (user + system) spent by this process while `fn` runs.
+// Wall-clock time on a shared, overloaded machine measures the machine, not
+// the code, so the timing checks below use CPU time.
+declare const process: { cpuUsage(previous?: { user: number; system: number }): { user: number; system: number } };
+
+function cpuMs<T>(fn: () => T): { value: T; ms: number } {
+  const start = process.cpuUsage();
+  const value = fn();
+  const used = process.cpuUsage(start);
+  return { value, ms: (used.user + used.system) / 1000 };
+}
+
+function fastestCpu(fn: () => unknown, samples = 5): number {
+  fn();
+  let best = Infinity;
+  for (let i = 0; i < samples; i++) best = Math.min(best, cpuMs(fn).ms);
+  return best;
+}
+
+describe("bug: quadratic-time (algorithmic-complexity DoS) inputs", { timeout: 120_000 }, () => {
   // Both cases below are realistic-shaped adversarial input (long runs of a
   // single character class), not contrived worst-case regexes. The old
   // implementation re-scanned an ever-larger slice of the string per
   // character in a hot loop, so cost grew with the SQUARE of input length;
-  // ~300KB of input took over a second. The budget below is generous (the
-  // fixed code finishes in single-digit-to-low-double-digit milliseconds on
-  // a dev laptop) but comfortably below what the old O(n^2) code needed.
+  // ~300KB of input took over a second. The budget below is CPU time and
+  // generous (the fixed code measured 2 to 112 ms of CPU for one cold call on
+  // 2026-10-10) but comfortably below what the old O(n^2) code needed. Each
+  // case also checks growth: 8x the input must cost under 32x the CPU time
+  // (linear is about 8x, quadratic about 64x).
   const TIME_BUDGET_MS = 500;
+  const GROWTH = 8;
+  const SCALING_LIMIT = 32;
+  const expectLinearGrowth = (build: (n: number) => string, n: number) => {
+    const small = build(n / GROWTH);
+    const large = build(n);
+    const smallMs = fastestCpu(() => splitSentences(small));
+    const largeMs = fastestCpu(() => splitSentences(large));
+    expect(largeMs / Math.max(smallMs, 0.5)).toBeLessThan(SCALING_LIMIT);
+  };
 
   it("splits a long run of colon-separated, marker-free clauses in linear-ish time", () => {
-    const input = "a: ".repeat(100_000) + "end.";
-    const start = Date.now();
-    const sentences = splitSentences(input);
-    const elapsed = Date.now() - start;
+    const build = (n: number) => "a: ".repeat(n) + "end.";
+    const input = build(100_000);
+    const { value: sentences, ms } = cpuMs(() => splitSentences(input));
     expect(sentences.length).toBeGreaterThan(0);
-    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+    expectLinearGrowth(build, 100_000);
   });
 
   it("splits a long run of single-letter initials in linear-ish time", () => {
-    let input = "";
-    for (let i = 0; i < 100_000; i++) {
-      input += String.fromCharCode(65 + (i % 26)) + ". ";
-    }
-    input += "End.";
-    const start = Date.now();
-    const sentences = splitSentences(input);
-    const elapsed = Date.now() - start;
+    const build = (n: number) => {
+      let input = "";
+      for (let i = 0; i < n; i++) {
+        input += String.fromCharCode(65 + (i % 26)) + ". ";
+      }
+      return input + "End.";
+    };
+    const input = build(100_000);
+    const { value: sentences, ms } = cpuMs(() => splitSentences(input));
     expect(sentences.length).toBeGreaterThan(0);
-    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+    expectLinearGrowth(build, 100_000);
   });
 
   it("handles one long unbroken run of letters with no period in linear-ish time", () => {
@@ -96,12 +127,12 @@ describe("bug: quadratic-time (algorithmic-complexity DoS) inputs", () => {
     // retry the greedy `*` from every start position before giving up:
     // O(n^2). 40,000 letters alone measured 827ms on the old code; this is
     // 100,000.
-    const input = "a".repeat(100_000);
-    const start = Date.now();
-    const sentences = splitSentences(input);
-    const elapsed = Date.now() - start;
+    const build = (n: number) => "a".repeat(n);
+    const input = build(100_000);
+    const { value: sentences, ms } = cpuMs(() => splitSentences(input));
     expect(sentences).toEqual([input]);
-    expect(elapsed).toBeLessThan(TIME_BUDGET_MS);
+    expect(ms).toBeLessThan(TIME_BUDGET_MS);
+    expectLinearGrowth(build, 100_000);
   });
 });
 

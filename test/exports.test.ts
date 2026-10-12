@@ -19,6 +19,9 @@ describe("DEFAULT_ABBREVIATIONS", () => {
       "no", "inc", "co", "corp", "ltd", "llc", "dept", "vol", "ed",
       "al", "etc", "eg", "ie", "approx", "fig", "p", "pp", "jr", "sr",
       "am", "pm", "us",
+      "plc", "est", "ca", "cf", "viz", "phd", "md", "uk", "eu",
+      "gov", "sen", "mt", "lt", "sgt", "capt", "messrs",
+      "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
     ]);
   });
 
@@ -81,8 +84,14 @@ describe("defaultSupports", () => {
   it("passes on normalized substring containment in either direction", () => {
     expect(defaultSupports("battery life", "the battery life reached 14 hours")).toBe(true);
     expect(
-      defaultSupports("the battery life reached 14 hours in testing", "battery life"),
+      defaultSupports("the battery life reached 14 hours in testing", "battery life reached 14 hours"),
     ).toBe(true);
+    // A short evidence string no longer supports a longer claim just by
+    // appearing in it (hunt 2026-10-10): it must be at least 12 characters and
+    // 60% of the claim.
+    expect(
+      defaultSupports("the battery life reached 14 hours in testing", "battery life"),
+    ).toBe(false);
   });
 
   it("word-overlap ratio: fails just below the 0.6 threshold (2/5 = 0.4)", () => {

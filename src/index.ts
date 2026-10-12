@@ -17,6 +17,7 @@ export {
   classifyDocument,
   defaultSupports,
   type SentenceStatus,
+  type CitationReason,
   type EvidenceMap,
   type SupportsFn,
   type ClassifyConfig,

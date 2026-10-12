@@ -184,6 +184,7 @@ describe("GK-F03: the marker scan ignores the sticky flag and never touches the 
       status: "grounded",
       citedIds: ["1"],
       validIds: ["1"],
+      reasons: { "1": "supported" },
     });
   });
 });
