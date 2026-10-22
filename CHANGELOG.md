@@ -14,7 +14,7 @@ the exported API, results and verdicts are identical to 0.3.0. Update your
 install line and imports to the new name. The repository moved to
 `evidencekit/citations`.
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-10-12
 
 Minor release. Statuses, exports and signatures are unchanged, and results
 gain two fields. Verdicts move in both directions, and a few inputs that used
