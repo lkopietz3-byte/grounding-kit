@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-22
+
+Renamed from `grounding-kit` to `@evidencekit/citations`. No behavior change:
+the exported API, results and verdicts are identical to 0.3.0. Update your
+install line and imports to the new name. The repository moved to
+`evidencekit/citations`.
+
 ## [0.3.0] - unreleased
 
 Minor release. Statuses, exports and signatures are unchanged, and results

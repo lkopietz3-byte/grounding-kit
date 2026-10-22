@@ -1,5 +1,5 @@
 {
-  "grounding-kit": [
+  "@evidencekit/citations": [
     "DEFAULT_ABBREVIATIONS",
     "DEFAULT_MARKER_PATTERN",
     "DEFAULT_PLACEHOLDER_PATTERN",

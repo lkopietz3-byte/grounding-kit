@@ -1,18 +1,18 @@
-# Project context: grounding-kit
+# Project context: @evidencekit/citations
 
 Mapped on **2026-09-26** from connected GitHub, Vercel, and Supabase metadata. This file is a navigation aid; verify current code and service settings before acting.
 
 ## Identity and repository settings
 
-- Repository: [lkopietz3-byte/grounding-kit](https://github.com/lkopietz3-byte/grounding-kit)
+- Repository: [evidencekit/citations](https://github.com/evidencekit/citations)
 - Purpose: A deterministic, structural first-pass checker for generated text. It splits the text into sentences and labels each one grounded, placeholder, ungrounded or invalid by checking its citation markers against an evidence map you supply. It does not verify that the evidence is true or that a sentence follows from it.
 - GitHub visibility: **public**; default branch: **`main`**; archived: **no**.
 - Product stage, owner, production health, and GitHub protection/settings beyond the fields above: **not verified**.
 
 ## Starting points
 
-- Purpose source: [README.md](https://github.com/lkopietz3-byte/grounding-kit/blob/main/README.md)
-- [package.json](https://github.com/lkopietz3-byte/grounding-kit/blob/main/package.json) contains scripts and declared dependencies; check the current file before using commands.
+- Purpose source: [README.md](https://github.com/evidencekit/citations/blob/main/README.md)
+- [package.json](https://github.com/evidencekit/citations/blob/main/package.json) contains scripts and declared dependencies; check the current file before using commands.
 
 ## Service map
 

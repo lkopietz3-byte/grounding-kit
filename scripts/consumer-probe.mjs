@@ -1,4 +1,4 @@
-// Imports grounding-kit by its package name from the installed tarball (the
+// Imports @evidencekit/citations by its package name from the installed tarball (the
 // way a real consumer would) and calls the real API, asserting real outputs
 // end to end: split -> classify sentence -> classify a whole document ->
 // strip markers. Also exercises the prototype-pollution and NFC/NFD fixes
@@ -14,7 +14,7 @@ const {
   defaultSupports,
   DEFAULT_ABBREVIATIONS,
   GroundingConfigError,
-} = await import("grounding-kit");
+} = await import("@evidencekit/citations");
 
 // --- splitSentences: abbreviation fusion + leading-marker peeling ---------
 const sentences = splitSentences(

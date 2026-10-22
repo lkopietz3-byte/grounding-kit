@@ -9,7 +9,7 @@ const {
   classifySentence,
   classifyDocument,
   GroundingConfigError,
-} = require('grounding-kit');
+} = require('@evidencekit/citations');
 
 const sentences = splitSentences('Dr. Alvarez reviewed the unit. It shipped the next day.');
 assert.deepEqual(sentences, ['Dr. Alvarez reviewed the unit.', 'It shipped the next day.']);

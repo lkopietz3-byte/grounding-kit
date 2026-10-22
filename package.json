@@ -1,7 +1,7 @@
 {
-  "name": "grounding-kit",
-  "version": "0.3.0",
-  "description": "Deterministic, zero-dependency sentence-level citation-grounding checker for AI-generated text. Splits text into sentences and classifies each as grounded, placeholder, ungrounded, or invalid (unknown or unsupported citation), with no LLM judge required.",
+  "name": "@evidencekit/citations",
+  "version": "0.3.1",
+  "description": "Deterministic, zero-dependency sentence-level citation checker for AI-generated text. Tells you which sentences are grounded in the evidence you supplied, which are uncited, and which cite an unknown or unsupported source, with no LLM judge required. Formerly grounding-kit.",
   "keywords": [
     "citation",
     "grounding",
@@ -11,17 +11,23 @@
     "fact-checking",
     "ai-safety",
     "sentence-splitter",
-    "honesty-kits"
+    "grounding-kit",
+    "evidence-kit",
+    "evidencekit"
   ],
   "author": "Lucas Kopietz",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lkopietz3-byte/grounding-kit.git"
+    "url": "git+https://github.com/evidencekit/citations.git"
   },
-  "homepage": "https://lkopietz3-byte.github.io/honesty-kits/#grounding-kit",
+  "homepage": "https://github.com/evidencekit/citations#readme",
   "bugs": {
-    "url": "https://github.com/lkopietz3-byte/grounding-kit/issues"
+    "url": "https://github.com/evidencekit/citations/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "type": "module",
   "main": "./dist/index.js",

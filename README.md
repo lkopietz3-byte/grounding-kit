@@ -1,6 +1,8 @@
-# grounding-kit
+# @evidencekit/citations
 
-**[Try it in your browser →](https://lkopietz3-byte.github.io/honesty-kits/#grounding-kit)** · Part of [honesty kits](https://github.com/lkopietz3-byte/honesty-kits), a family of small checks for the claims an AI product makes.
+Formerly published as `@evidencekit/citations`.
+
+**[Try it in your browser →](https://evidencekit.github.io/#citations)** · Part of [Evidence Kit](https://github.com/evidencekit), checks that tie AI output and public claims back to their evidence.
 
 A structural citation gate for AI answers that carry inline citation ids.
 Give it the answer text and the evidence you gave the model (a map from id to
@@ -33,7 +35,7 @@ output; see "Recipes" below. These rates describe the benchmark's text, not your
 ## How it works
 
 The generator writes a marker after each claim it can back, or a placeholder
-such as `[citation needed]` where it cannot. grounding-kit splits the answer
+such as `[citation needed]` where it cannot. @evidencekit/citations splits the answer
 into sentence-level units, keeps each marker on the unit it belongs to, and
 classifies every unit:
 
@@ -56,10 +58,10 @@ marker after every claim (each clause after a `;` or a dash needs its own),
 and pass evidence as tight, chunk-level spans: whole-document evidence lets
 more wrong citations through.
 
-**Relationship to corroboration-kit:** a sibling library that answers a
-different question. grounding-kit checks that a citation *marker* in generated
+**Relationship to @evidencekit/corroboration:** a sibling library that answers a
+different question. @evidencekit/citations checks that a citation *marker* in generated
 text points at the evidence span it is supposed to (mechanical, sentence-level,
-no judgment about the evidence itself). corroboration-kit applies fixed rules
+no judgment about the evidence itself). @evidencekit/corroboration applies fixed rules
 to signals you have already collected and labeled, and returns a verdict
 bounded by the coverage you report; it trusts your labels and is not
 independent verification. See "Relationship to sibling kits" below.
@@ -67,15 +69,15 @@ independent verification. See "Relationship to sibling kits" below.
 ## Install
 
 ```bash
-npm install grounding-kit
+npm install @evidencekit/citations
 ```
 
 Zero runtime dependencies. Ships TypeScript declarations. Or build from
 source:
 
 ```bash
-git clone https://github.com/lkopietz3-byte/grounding-kit.git
-cd grounding-kit
+git clone https://github.com/evidencekit/citations.git
+cd citations
 npm ci
 npm run build
 ```
@@ -85,8 +87,8 @@ load it. `require()` also works where Node can `require(esm)`:
 
 | How you load it | Node 20.19+ | Node 22.12+ | Node 24 and 26 | Older Node 20 or 22 |
 | --- | --- | --- | --- | --- |
-| `import { classifyDocument } from "grounding-kit"` | works | works | works | works |
-| `require("grounding-kit")` | works | works | works | fails (no `require(esm)`); use `import()` |
+| `import { classifyDocument } from "@evidencekit/citations"` | works | works | works | works |
+| `require("@evidencekit/citations")` | works | works | works | fails (no `require(esm)`); use `import()` |
 
 Recommended runtimes are Node 22 and 24 (LTS) and Node 26 (current). Node 20 is
 end-of-life. CI still runs the tests and the installed-package probes on Node
@@ -97,7 +99,7 @@ is compatibility testing, not a recommendation. `engines` in `package.json` is
 ## Quick start
 
 ```ts
-import { classifyDocument } from "grounding-kit";
+import { classifyDocument } from "@evidencekit/citations";
 
 // evidenceMap: citation marker id -> the evidence text it's allowed to support.
 // In a real app this is whatever you actually fed the model (retrieved
@@ -147,7 +149,7 @@ as supported by evidence that says `330 metres`. A few lines fix numbers on
 top of it:
 
 ```ts
-import { classifyDocument, defaultSupports, type SupportsFn } from "grounding-kit";
+import { classifyDocument, defaultSupports, type SupportsFn } from "@evidencekit/citations";
 
 const numbersIn = (text: string) => text.match(/\d+(?:[.,]\d+)*/g) ?? [];
 
@@ -170,7 +172,7 @@ For paraphrase-heavy output, block only on the structural failures and send
 lexical misses to a person:
 
 ```ts
-import { classifyDocument } from "grounding-kit";
+import { classifyDocument } from "@evidencekit/citations";
 
 const result = classifyDocument(answer, evidence);
 const hard = (s: (typeof result.sentences)[number]) =>
@@ -268,7 +270,7 @@ object or has an unknown key, or an option of the wrong type (see "Errors"
 below).
 
 ```ts
-import { splitSentences } from "grounding-kit";
+import { splitSentences } from "@evidencekit/citations";
 
 splitSentences("Dr. Alvarez reviewed the unit. It shipped the next day.");
 // ["Dr. Alvarez reviewed the unit.", "It shipped the next day."]
@@ -316,7 +318,7 @@ word is a sentence opener (`Plan B. The vendor agreed.`).
 The defaults are small and English-oriented:
 
 ```ts
-import { DEFAULT_ABBREVIATIONS } from "grounding-kit";
+import { DEFAULT_ABBREVIATIONS } from "@evidencekit/citations";
 // alwaysFuse: mr mrs ms dr prof hon st v vs
 // contextFuse: no inc co corp ltd llc dept vol ed al etc eg ie approx fig p pp jr sr am pm us
 //              plc est ca cf viz phd md uk eu gov sen mt lt sgt capt messrs
@@ -424,7 +426,7 @@ Classification rule, in precedence order (highest first):
 when an id is cited more than once, its worst result is reported.
 
 ```ts
-import { classifySentence } from "grounding-kit";
+import { classifySentence } from "@evidencekit/citations";
 
 classifySentence(
   "The warranty covers accidental damage for five years [[cite:e2]].",
@@ -567,7 +569,7 @@ good enough to catch an obviously wrong or missing citation and to run in CI
 with zero cost or latency; see **Limits** below for what it can't do.
 
 ```ts
-import { classifyDocument, type SupportsFn } from "grounding-kit";
+import { classifyDocument, type SupportsFn } from "@evidencekit/citations";
 
 const embeddingSupports: SupportsFn = (claim, evidenceText) => {
   const sim = cosineSimilarity(embed(claim), embed(evidenceText));
@@ -751,18 +753,18 @@ function.
 
 ## Relationship to sibling kits
 
-[`provenance-kit`](https://github.com/lkopietz3-byte/provenance-kit) labels
+[`@evidencekit/wording`](https://github.com/evidencekit/wording) labels
 claims as verified, modeled or editorial and checks that the public wording
 does not claim more certainty than the label allows. It never looks at
-evidence, and `grounding-kit` does not read its labels, so the two share no
-code and no data. A pipeline could run `grounding-kit` first (is this sentence
-backed by a citation into the evidence map) and `provenance-kit` second (does
+evidence, and `@evidencekit/citations` does not read its labels, so the two share no
+code and no data. A pipeline could run `@evidencekit/citations` first (is this sentence
+backed by a citation into the evidence map) and `@evidencekit/wording` second (does
 its wording match its tier).
-[`corroboration-kit`](https://github.com/lkopietz3-byte/corroboration-kit)
+[`@evidencekit/corroboration`](https://github.com/evidencekit/corroboration)
 applies fixed rules to signals you have already collected and labeled, and
 returns a verdict bounded by the coverage you report. It trusts your labels
-and is not independent verification. Use `grounding-kit` to find which
-sentences claim support, then `corroboration-kit` if you want its rules
+and is not independent verification. Use `@evidencekit/citations` to find which
+sentences claim support, then `@evidencekit/corroboration` if you want its rules
 applied to the signals you gathered for a claim.
 
 ## Development

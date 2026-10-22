@@ -1,4 +1,4 @@
-# grounding-kit: agent instructions
+# @evidencekit/citations: agent instructions
 
 Deterministic, zero-dependency sentence-level citation-grounding checker for AI-generated text. Splits text into sentences and classifies each as grounded, placeholder, ungrounded, or invalid (unknown or unsupported citation), with no LLM judge required.
 

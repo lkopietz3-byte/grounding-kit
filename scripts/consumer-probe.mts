@@ -1,4 +1,4 @@
-// Strict NodeNext type probe: uses grounding-kit's public types the way a
+// Strict NodeNext type probe: uses @evidencekit/citations public types the way a
 // TypeScript consumer would, imported by package name from the installed
 // tarball. Compiled with `tsc --noEmit --strict` by verify-package.mjs; not
 // executed, so this deliberately avoids node:assert (this kit has no
@@ -19,7 +19,7 @@ import {
   type SentenceStatus,
   type SplitterConfig,
   type SupportsFn,
-} from "grounding-kit";
+} from "@evidencekit/citations";
 
 const evidence: EvidenceMap = {
   e1: "independent lab testing measured 14 hours of battery life",
