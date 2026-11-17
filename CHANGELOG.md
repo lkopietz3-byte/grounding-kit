@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-10-12
 
 Minor release. Statuses, exports and signatures are unchanged, and results
 gain two fields. Verdicts move in both directions, and a few inputs that used
