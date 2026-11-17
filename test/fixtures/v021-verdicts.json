@@ -82,7 +82,7 @@
   "H24-paraphrase-mild": true,
   "H25-blockquote": true
  },
- "codex": {
+ "review": {
   "CX-table-header-statement": false,
   "CX-four-backtick-fence": false,
   "CX-tilde-closer-for-backtick": false,

@@ -4,7 +4,6 @@ Deterministic, zero-dependency sentence-level citation-grounding checker for AI-
 
 ## Read first
 - `ENGINEERING.md` holds this package's invariants and design rules; read it before changing behavior.
-- `PROJECT_CONTEXT.md` is the current project state and decisions.
 - `SECURITY.md` covers the security posture; follow it for anything touching input handling.
 
 ## Commands (from package.json)
@@ -25,11 +24,7 @@ Deterministic, zero-dependency sentence-level citation-grounding checker for AI-
 - Behavior changes start with a verdict row (`test/verdict-table.test.ts`) that fails before the fix. Never edit an expected verdict, or the 0.2.1 verdicts in `test/fixtures/v021-verdicts.json`, just to get green; `test/gate.test.ts` must stay green.
 - Measure timing with CPU time, rerun a load timeout alone before treating it as real, and never loosen a timing or verdict assertion.
 
-## Review preparation
-
-See [docs/REVIEW_READINESS.md](docs/REVIEW_READINESS.md) for milestone review cadence, declared verification gates and the next launch-preparation task.
-
-## Code Review Rules
+## Review notes
 
 - Preserve classification precedence: invalid citation outranks placeholder, then grounded and ungrounded. Missing, inherited or non-string evidence entries must classify as invalid rather than supporting a clean result.
 - Keep defaultSupports described as substring/word-overlap matching, not semantic entailment, and keep the README's measured rates tied to a named benchmark. A custom supports hook must return a synchronous boolean; do not silently accept async or malformed hook results.

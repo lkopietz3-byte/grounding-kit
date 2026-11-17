@@ -13,22 +13,27 @@ dependencies; same input, same output.
 as `[[cite:e1]]` (RAG answer engines, report drafters, summarizers) and want a
 free, fast check in CI or before an answer ships.
 
-**The job it does well:** the structural checks. On a 200-item benchmark
-(100 honest sentences, 100 with a planted error), every uncited sentence,
-unknown id and wrong-chunk citation was caught (60 of 60), and an uncited
+**The job it does well:** the structural checks. A sentence with no citation
+is flagged, and so is a citation to an id you never provided. An uncited
 sentence cannot ride a neighbor's citation (after a period, a closing quote,
-an abbreviation, a dash or a semicolon).
+an abbreviation, a dash or a semicolon). These cases are pinned as rows in
+`test/fixtures/verdict-rows.ts` and run on every build.
 
 **What it does not do:** decide whether a sentence is true to its source. The
-built-in `supports()` check is lexical word overlap. In the same benchmark it
-flagged 21 of 100 honest sentences (1 of 35 verbatim, 2 of 35 close
-paraphrases, but 18 of 30 natural abstractive answers), and it caught 78 of
-90 planted content errors (negation flips 6 of 10). A changed number or an
-inserted "not" often passes, because the check does not compare short words
-or numbers in the claim against the evidence. Plug in your own `supports()`
-(an embedding, NLI or number-aware check) for the semantic step, and treat
-the default `not-supported` verdict as a review flag for paraphrase-heavy
-output; see "Recipes" below. These rates describe the benchmark's text, not yours.
+built-in `supports()` check is lexical word overlap. A natural paraphrase
+(`The cell keeps going for roughly two days between charges.` against
+evidence that says the battery lasts 40 hours) is flagged `invalid`, and a
+changed number or an inserted "not" can pass, because the check does not
+compare short words or numbers in the claim against the evidence. Plug in
+your own `supports()` (an embedding, NLI or number-aware check) for the
+semantic step, and treat the default `not-supported` verdict as a review flag
+for paraphrase-heavy output; see "Recipes" below.
+
+**Evidence in this repo:** the one measured result is a small regression
+corpus, `test/fixtures/hunter-corpus.ts` (55 laundering documents and 25
+honest ones, written for the 0.3.0 release). Under default options the check
+flags 52 of the 55 laundering documents and passes 14 of the 25 honest ones.
+It is a regression gate, not a measure of how your own text will do.
 
 ## How it works
 
@@ -375,7 +380,7 @@ line to the line before it when it starts in lower case, or when the line
 before ends with a comma or a word such as `the`, `of`, `and` or `is`.
 
 The trade-off, measured on a 55-document laundering corpus and 25 honest
-documents from the 2026-10-10 review: the default catches 52 of 55
+documents from `test/fixtures/hunter-corpus.ts`: the default catches 52 of 55
 laundering documents and passes 14 of 25 honest ones; `markdown: true`
 passes 21 of 25 honest ones but catches only 34 of 55, because a claim
 written as a heading, a short bold line, a table header, a lead-in or a

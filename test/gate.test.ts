@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyDocument, splitSentences } from "../src/index.js";
 import { HUNTER_CASES } from "./fixtures/hunter-corpus.js";
-import { CODEX_CASES } from "./fixtures/codex-cases.js";
+import { REVIEW_CASES } from "./fixtures/review-cases.js";
 import { ROWS, type VerdictRow } from "./fixtures/verdict-rows.js";
 import { HUNT_ROWS } from "./fixtures/hunt-rows.js";
 import V021 from "./fixtures/v021-verdicts.json";
@@ -13,7 +13,7 @@ import { withWatchdog } from "./helpers/watchdog.js";
 // verdicts were recorded from the published package into
 // fixtures/v021-verdicts.json (regenerate only with the real 0.2.1 build).
 
-const v021 = V021 as { hunter: Record<string, boolean>; codex: Record<string, boolean>; table: Record<string, boolean> };
+const v021 = V021 as { hunter: Record<string, boolean>; review: Record<string, boolean>; table: Record<string, boolean> };
 const cleanByDefault = (text: string, evidence: Record<string, string>) =>
   classifyDocument(text, evidence).isClean;
 
@@ -37,25 +37,25 @@ describe("gate: no new false passes and no honest regressions against 0.2.1 (def
     expect(regressions).toEqual([]);
   });
 
-  it("Codex review documents are flagged (under their own config, default when none)", () => {
-    const missed = CODEX_CASES.filter((c) => classifyDocument(c.text, c.ev, c.config).isClean).map((c) => c.id);
+  it("Review documents are flagged (under their own config, default when none)", () => {
+    const missed = REVIEW_CASES.filter((c) => classifyDocument(c.text, c.ev, c.config).isClean).map((c) => c.id);
     expect(missed).toEqual([]);
   });
 
-  it("Codex review documents with a custom marker pattern that 0.2.1 flagged stay flagged", () => {
-    const hits = CODEX_CASES.filter(
+  it("Review documents with a custom marker pattern that 0.2.1 flagged stay flagged", () => {
+    const hits = REVIEW_CASES.filter(
       (c) =>
         c.config?.markerPattern !== undefined &&
         c.config.markdown === undefined &&
-        v021.codex[c.id] === false &&
+        v021.review[c.id] === false &&
         classifyDocument(c.text, c.ev, c.config).isClean,
     ).map((c) => c.id);
     expect(hits).toEqual([]);
   });
 
-  it("Codex review documents that 0.2.1 flagged stay flagged under default options", () => {
-    const hits = CODEX_CASES.filter(
-      (c) => c.config === undefined && v021.codex[c.id] === false && cleanByDefault(c.text, c.ev),
+  it("Review documents that 0.2.1 flagged stay flagged under default options", () => {
+    const hits = REVIEW_CASES.filter(
+      (c) => c.config === undefined && v021.review[c.id] === false && cleanByDefault(c.text, c.ev),
     ).map((c) => c.id);
     expect(hits).toEqual([]);
   });
@@ -74,13 +74,28 @@ describe("gate: no new false passes and no honest regressions against 0.2.1 (def
     expect(regressions).toEqual([]);
   });
 
+  // These are the figures the README states. If a change moves them, update
+  // the README in the same commit.
+  it("README figures: default flags 52 of 55 laundering and passes 14 of 25 honest documents", () => {
+    const launder = HUNTER_CASES.filter((c) => c.kind === "launder");
+    const honest = HUNTER_CASES.filter((c) => c.kind === "honest");
+    expect(launder.filter((c) => !cleanByDefault(c.text, c.ev))).toHaveLength(52);
+    expect(honest.filter((c) => cleanByDefault(c.text, c.ev))).toHaveLength(14);
+  });
+
+  it("README figures: markdown mode flags 34 of 55 laundering and passes 21 of 25 honest documents", () => {
+    const md = (c: { text: string; ev: Record<string, string> }) => classifyDocument(c.text, c.ev, { markdown: true }).isClean;
+    expect(HUNTER_CASES.filter((c) => c.kind === "launder" && !md(c))).toHaveLength(34);
+    expect(HUNTER_CASES.filter((c) => c.kind === "honest" && md(c))).toHaveLength(21);
+  });
+
   it("the hunter corpus is complete (55 laundering, 25 honest)", () => {
     expect(HUNTER_CASES.filter((c) => c.kind === "launder")).toHaveLength(55);
     expect(HUNTER_CASES.filter((c) => c.kind === "honest")).toHaveLength(25);
   });
 });
 
-describe("Codex review: an empty Unicode placeholder match cannot hang the scan", () => {
+describe("Review: an empty Unicode placeholder match cannot hang the scan", () => {
   it("advances by a whole code point", () => {
     expect(withWatchdog(() => splitSentences("😀.", { placeholderPattern: /x*/u }), 2000)).toEqual(["😀."]);
     expect(withWatchdog(() => splitSentences("a😀b. c.", { placeholderPattern: new RegExp("(?:)", "v") }), 2000)).toEqual([

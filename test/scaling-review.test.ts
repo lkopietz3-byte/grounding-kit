@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyDocument, defaultSupports, splitSentences, type ClassifyConfig } from "../src/index.js";
 
-// Inputs from the 2662560 and 2042351 reviews (Codex and the false-pass
+// Inputs from the 2662560 and 2042351 reviews (an outside review and the false-pass
 // hunt) that were quadratic, checked at 20k and 80k characters (or 4x more
 // items), by CPU time. Linear code takes about 4x longer; quadratic about
 // 16x. The limit leaves room for a noisy runner.

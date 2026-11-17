@@ -1,4 +1,4 @@
-// Documents from the Codex reviews of 2662560, 2042351 and 9ca1177
+// Documents from the external reviews of 2662560, 2042351 and 9ca1177
 // (2026-10-10). Every one contains an uncited or unsupported claim, so
 // isClean must be false. Cases without `config` are checked under default
 // options (the release gate); cases with `config` are checked under that
@@ -6,7 +6,7 @@
 
 import type { ClassifyConfig } from "../../src/index.js";
 
-type CodexCase = {
+type ReviewCase = {
   id: string;
   kind: "launder";
   ev: Record<string, string>;
@@ -26,7 +26,7 @@ const INVISIBLES = [
 ];
 const WESTERN_CLOSERS = ['"', "'", "”", "’", ")", "»", "**"];
 
-export const CODEX_CASES: CodexCase[] = [
+export const REVIEW_CASES: ReviewCase[] = [
   { id: "CX-table-header-statement", kind: "launder", ev: {}, text: "| Prices doubled last spring. |\n|---|" },
   { id: "CX-four-backtick-fence", kind: "launder", ev: {}, text: "````\nClaim [[cite:missing]].\n```" },
   { id: "CX-tilde-closer-for-backtick", kind: "launder", ev: {}, text: "```\nClaim [[cite:missing]].\n~~~" },
