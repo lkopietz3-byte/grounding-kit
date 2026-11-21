@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-21
+
+Documentation only. The package code and API are the same as 0.3.1.
+
 ### Changed
 
 - Until November 17, 2026, this README quoted results from a 200-item benchmark. I removed those figures. The figures now come from the 55 and 25 documents in `test/fixtures/hunter-corpus.ts`.
