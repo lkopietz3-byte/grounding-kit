@@ -697,6 +697,7 @@ function.
 
 ## Limits (read this before shipping on the default config)
 
+- **Earlier figures were removed.** Until November 17, 2026, this README quoted results from a 200-item benchmark. I removed those figures. The figures now come from the 55 and 25 documents in `test/fixtures/hunter-corpus.ts`.
 - **`defaultSupports()` is naive lexical matching, not semantic
   entailment.** It will pass some claims that only coincidentally share words
   with their evidence, and it will fail some genuinely correct paraphrases.
