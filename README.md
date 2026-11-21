@@ -14,10 +14,13 @@ as `[[cite:e1]]` (RAG answer engines, report drafters, summarizers) and want a
 free, fast check in CI or before an answer ships.
 
 **The job it does well:** the structural checks. A sentence with no citation
-is flagged, and so is a citation to an id you never provided. An uncited
-sentence cannot ride a neighbor's citation (after a period, a closing quote,
-an abbreviation, a dash or a semicolon). These cases are pinned as rows in
-`test/fixtures/verdict-rows.ts` and run on every build.
+is flagged, and so is a citation to an id you never provided. A citation stays
+with its own sentence when the kit finds a boundary. The kit splits at
+ordinary sentence endings and can split after a closing quote or an
+abbreviation such as `Inc.`. Semicolons and em dashes can also split clauses.
+A single capital letter followed by a period can look like an initial, so the
+kit can treat `We hired Agent K. Prices doubled.` as one sentence. See the
+boundary examples in `test/fixtures/verdict-rows.ts`.
 
 **What it does not do:** decide whether a sentence is true to its source. The
 built-in `supports()` check is lexical word overlap. A natural paraphrase
