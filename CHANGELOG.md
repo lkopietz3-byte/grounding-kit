@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-20
+
+Documentation only. The package code and API are the same as 0.3.0.
+
+### Changed
+
+- The packaged CHANGELOG dates every release. The 0.3.0 package listed its own version as unreleased.
+- The README says which sentence boundaries keep a citation with its own sentence, and that a single capital letter followed by a period (as in Agent K.) can join two sentences.
+- The README labels figures whose data is not in the repository.
+
 ## [0.3.0] - 2026-10-12
 
 Minor release. Statuses, exports and signatures are unchanged, and results
